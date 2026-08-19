@@ -41,14 +41,15 @@ def test_sequence_rejects_gaps() -> None:
 
 
 def test_synchronizer_uses_only_completed_aligned_candles() -> None:
-    data = {
-        Timeframe.M1: [candle(Timeframe.M1, 0), candle(Timeframe.M1, 1)],
-        Timeframe.M5: [candle(Timeframe.M5, 0), candle(Timeframe.M5, 5)],
-        Timeframe.M15: [candle(Timeframe.M15, 0), candle(Timeframe.M15, 15)],
-    }
+    m1 = [candle(Timeframe.M1, minute) for minute in range(0, 15)]
+    m5 = [candle(Timeframe.M5, minute) for minute in (0, 5, 10)]
+    m15 = [candle(Timeframe.M15, 0)]
+    data = {Timeframe.M1: m1, Timeframe.M5: m5, Timeframe.M15: m15}
+
     now = datetime(2026, 1, 2, 12, 16, tzinfo=timezone.utc)
     result = synchronize_completed(data, now)
 
     assert result.candles[Timeframe.M1].timestamp_utc.minute == 14
     assert result.candles[Timeframe.M5].timestamp_utc.minute == 10
     assert result.candles[Timeframe.M15].timestamp_utc.minute == 0
+    assert result.decision_time_utc == datetime(2026, 1, 2, 12, 15, tzinfo=timezone.utc)

@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from quotex_mtf_signal_bot.core.models import Candle, Timeframe
+from quotex_mtf_signal_bot.core.models import Candle, Tick, Timeframe
 
 
 _MT5_TIMEFRAME_NAMES = {
@@ -16,7 +16,7 @@ _MT5_TIMEFRAME_NAMES = {
 
 
 class MT5DataSource:
-    """Thin MT5 adapter; all strategy code stays independent of MetaTrader5."""
+    """Thin MT5 adapter; strategy code stays independent of MetaTrader5."""
 
     def __init__(self, mt5_module: Any) -> None:
         self._mt5 = mt5_module
@@ -27,11 +27,26 @@ class MT5DataSource:
     def shutdown(self) -> None:
         self._mt5.shutdown()
 
-    def server_tick_time(self, symbol: str) -> datetime:
-        tick = self._mt5.symbol_info_tick(symbol)
-        if tick is None:
+    def tick(self, symbol: str) -> Tick:
+        """Read the latest broker tick with millisecond precision when MT5 exposes it."""
+        raw = self._mt5.symbol_info_tick(symbol)
+        if raw is None:
             raise RuntimeError(f"No tick available for {symbol}")
-        return datetime.fromtimestamp(int(tick.time), tz=timezone.utc)
+
+        if hasattr(raw, "time_msc"):
+            timestamp = datetime.fromtimestamp(int(raw.time_msc) / 1000, tz=timezone.utc)
+        else:
+            timestamp = datetime.fromtimestamp(int(raw.time), tz=timezone.utc)
+
+        return Tick(
+            symbol=symbol,
+            timestamp_utc=timestamp,
+            bid=float(raw.bid),
+            ask=float(raw.ask),
+        )
+
+    def server_tick_time(self, symbol: str) -> datetime:
+        return self.tick(symbol).timestamp_utc
 
     def candles(self, symbol: str, timeframe: Timeframe, count: int = 500) -> list[Candle]:
         mt5_tf = getattr(self._mt5, _MT5_TIMEFRAME_NAMES[timeframe])

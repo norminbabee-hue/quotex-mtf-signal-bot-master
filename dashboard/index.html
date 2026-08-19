@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Quotex MTF Signal Bot — Backtest Dashboard</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <p class="eyebrow">RESEARCH DASHBOARD</p>
+      <h1>Backtest Performance</h1>
+      <p class="muted">A local dashboard for reviewing historical signal results. It does not execute trades.</p>
+    </header>
+
+    <section class="controls" aria-label="Backtest controls">
+      <label>Pair <select id="pair"><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option>AUDUSD</option></select></label>
+      <label>Timeframe <select id="timeframe"><option>M1</option><option>M5</option><option>M15</option></select></label>
+      <button id="refresh">Refresh metrics</button>
+    </section>
+
+    <section class="grid" aria-label="Performance metrics">
+      <article><span>Total signals</span><strong id="total">—</strong></article>
+      <article><span>Wins</span><strong id="wins">—</strong></article>
+      <article><span>Losses</span><strong id="losses">—</strong></article>
+      <article><span>Ties</span><strong id="ties">—</strong></article>
+      <article><span>Win rate</span><strong id="winRate">—</strong></article>
+      <article><span>Loss rate</span><strong id="lossRate">—</strong></article>
+      <article><span>Max win streak</span><strong id="winStreak">—</strong></article>
+      <article><span>Max loss streak</span><strong id="lossStreak">—</strong></article>
+    </section>
+
+    <section class="panel">
+      <h2>Recent results</h2>
+      <table>
+        <thead><tr><th>Time</th><th>Pair</th><th>Direction</th><th>Expiry</th><th>Confidence</th><th>Outcome</th></tr></thead>
+        <tbody id="results"><tr><td colspan="6" class="muted">No backtest data loaded yet.</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

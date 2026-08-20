@@ -40,17 +40,7 @@ def features(candle: Candle) -> CandleFeatures:
     lower = min(candle.open, candle.close) - candle.low
 
     if candle_range == 0:
-        return CandleFeatures(
-            bullish=candle.close > candle.open,
-            bearish=candle.close < candle.open,
-            body=body,
-            upper_wick=upper,
-            lower_wick=lower,
-            range=candle_range,
-            body_ratio=Decimal(0),
-            upper_wick_ratio=Decimal(0),
-            lower_wick_ratio=Decimal(0),
-        )
+        return CandleFeatures(candle.close > candle.open, candle.close < candle.open, body, upper, lower, candle_range, Decimal(0), Decimal(0), Decimal(0))
 
     return CandleFeatures(
         bullish=candle.close > candle.open,
@@ -68,25 +58,14 @@ def features(candle: Candle) -> CandleFeatures:
 def _engulfing(previous: Candle, current: Candle) -> tuple[bool, bool]:
     prev = features(previous)
     cur = features(current)
-    bullish = (
-        prev.bearish
-        and cur.bullish
-        and current.open <= previous.close
-        and current.close >= previous.open
-    )
-    bearish = (
-        prev.bullish
-        and cur.bearish
-        and current.open >= previous.close
-        and current.close <= previous.open
-    )
+    bullish = prev.bearish and cur.bullish and current.open <= previous.close and current.close >= previous.open
+    bearish = prev.bullish and cur.bearish and current.open >= previous.close and current.close <= previous.open
     return bullish, bearish
 
 
 def snapshot(candles: list[Candle]) -> PriceActionSnapshot:
     if not candles:
         raise ValueError("At least one candle is required")
-
     current = features(candles[-1])
     previous = features(candles[-2]) if len(candles) >= 2 else None
     bullish_engulfing = bearish_engulfing = False
@@ -100,20 +79,10 @@ def snapshot(candles: list[Candle]) -> PriceActionSnapshot:
     )
     bearish_rejection = (
         current.upper_wick_ratio >= Decimal("0.45")
-        and current.body_ratio >= Decimal("0.20")
+        and current.body_ratio >= Decimal("0.15")
         and current.lower_wick_ratio <= Decimal("0.25")
     )
-
     momentum_bullish = current.bullish and current.body_ratio >= Decimal("0.60")
     momentum_bearish = current.bearish and current.body_ratio >= Decimal("0.60")
 
-    return PriceActionSnapshot(
-        current=current,
-        previous=previous,
-        bullish_engulfing=bullish_engulfing,
-        bearish_engulfing=bearish_engulfing,
-        bullish_rejection=bullish_rejection,
-        bearish_rejection=bearish_rejection,
-        momentum_bullish=momentum_bullish,
-        momentum_bearish=momentum_bearish,
-    )
+    return PriceActionSnapshot(current, previous, bullish_engulfing, bearish_engulfing, bullish_rejection, bearish_rejection, momentum_bullish, momentum_bearish)

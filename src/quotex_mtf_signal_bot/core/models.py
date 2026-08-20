@@ -10,6 +10,11 @@ class Timeframe(StrEnum):
     M5 = "M5"
     M15 = "M15"
 
+    @property
+    def minutes(self) -> int:
+        """Return the duration of this timeframe in minutes."""
+        return {Timeframe.M1: 1, Timeframe.M5: 5, Timeframe.M15: 15}[self]
+
 
 class SignalDirection(StrEnum):
     CALL = "CALL"
@@ -34,7 +39,7 @@ class Candle:
     high: float
     low: float
     close: float
-    tick_volume: int
+    tick_volume: int = 0
 
     @property
     def is_bullish(self) -> bool:

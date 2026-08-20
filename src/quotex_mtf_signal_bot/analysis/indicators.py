@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from math import fsum
 
 from quotex_mtf_signal_bot.core.models import Candle
 
@@ -20,7 +19,7 @@ class IndicatorSnapshot:
 def _closes(candles: list[Candle]) -> list[Decimal]:
     if not candles:
         raise ValueError("At least one candle is required")
-    return [c.close for c in candles]
+    return [Decimal(c.close) for c in candles]
 
 
 def ema(candles: list[Candle], period: int) -> Decimal | None:
@@ -63,6 +62,8 @@ def rsi(candles: list[Candle], period: int = 14) -> Decimal | None:
 
 
 def _ema_values(values: list[Decimal], period: int) -> list[Decimal]:
+    if period <= 0:
+        raise ValueError("EMA period must be positive")
     if len(values) < period:
         return []
     current = sum(values[:period], Decimal(0)) / Decimal(period)
@@ -95,26 +96,12 @@ def macd(
     fast_aligned = fast_series[offset:]
     macd_series = [fast - slow for fast, slow in zip(fast_aligned, slow_series)]
     if len(macd_series) < signal_period:
-        return None, None, None
+        return macd_series[-1], None, None
 
-    signal_series = _ema_values(
-        [
-            Candle(
-                symbol=candles[0].symbol,
-                timeframe=candles[0].timeframe,
-                timestamp_utc=candles[0].timestamp_utc,
-                open=value,
-                high=value,
-                low=value,
-                close=value,
-            )
-            for value in macd_series
-        ],
-        signal_period,
-    )
+    signal_series = _ema_values(macd_series, signal_period)
     signal_value = signal_series[-1]
     macd_value = macd_series[-1]
-    histogram = macd_value - signal_value if signal_value is not None else None
+    histogram = macd_value - signal_value
     return macd_value, signal_value, histogram
 
 

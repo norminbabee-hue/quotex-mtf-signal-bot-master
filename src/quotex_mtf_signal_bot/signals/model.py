@@ -16,15 +16,14 @@ class Signal:
     expiry: str
     confidence: Decimal
     entry_time_utc: datetime
-    score: int
-    reasons: tuple[str, ...]
+    score: int = 0
+    reasons: tuple[str, ...] = ()
 
 
 def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -> Signal | None:
     score: SignalScore = score_mtf(analysis)
     if score.direction == "NO_SIGNAL":
         return None
-
     expiry: ExpiryDecision = choose_expiry(analysis)
     return Signal(
         symbol=symbol,

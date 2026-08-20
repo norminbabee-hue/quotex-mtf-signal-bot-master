@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
 
@@ -12,7 +13,6 @@ class Timeframe(StrEnum):
 
     @property
     def minutes(self) -> int:
-        """Return the duration of this timeframe in minutes."""
         return {Timeframe.M1: 1, Timeframe.M5: 5, Timeframe.M15: 15}[self]
 
 
@@ -26,8 +26,8 @@ class SignalDirection(StrEnum):
 class Tick:
     symbol: str
     timestamp_utc: datetime
-    bid: float
-    ask: float
+    bid: Decimal
+    ask: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,10 +35,10 @@ class Candle:
     symbol: str
     timeframe: Timeframe
     timestamp_utc: datetime
-    open: float
-    high: float
-    low: float
-    close: float
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
     tick_volume: int = 0
 
     @property

@@ -22,15 +22,15 @@ class SupportResistanceSnapshot:
 
 def _is_swing_low(candles: list[Candle], index: int, strength: int) -> bool:
     center = candles[index].low
-    left = candles[index - strength : index]
-    right = candles[index + 1 : index + strength + 1]
+    left = candles[index - strength:index]
+    right = candles[index + 1:index + strength + 1]
     return all(center <= c.low for c in (*left, *right))
 
 
 def _is_swing_high(candles: list[Candle], index: int, strength: int) -> bool:
     center = candles[index].high
-    left = candles[index - strength : index]
-    right = candles[index + 1 : index + strength + 1]
+    left = candles[index - strength:index]
+    right = candles[index + 1:index + strength + 1]
     return all(center >= c.high for c in (*left, *right))
 
 
@@ -44,10 +44,7 @@ def _cluster(values: list[Decimal], tolerance: Decimal) -> list[tuple[Decimal, i
                 break
         else:
             clusters.append([value])
-    return [
-        (sum(cluster, Decimal(0)) / Decimal(len(cluster)), len(cluster))
-        for cluster in clusters
-    ]
+    return [(sum(cluster, Decimal(0)) / Decimal(len(cluster)), len(cluster)) for cluster in clusters]
 
 
 def find_levels(
@@ -70,28 +67,22 @@ def find_levels(
         if _is_swing_high(candles, index, swing_strength):
             highs.append(candles[index].high)
 
+    # A market can be trending and contain no strict N-bar swing low/high.
+    # Keep the strongest observed extrema as fallback levels so the analysis
+    # still has usable context rather than returning an empty side.
+    if not lows:
+        lows.append(min(c.low for c in candles))
+    if not highs:
+        highs.append(max(c.high for c in candles))
+
     current = candles[-1].close
-    supports = [
-        (price, touches)
-        for price, touches in _cluster(lows, tolerance)
-        if price <= current
-    ]
-    resistances = [
-        (price, touches)
-        for price, touches in _cluster(highs, tolerance)
-        if price >= current
-    ]
+    supports = [(price, touches) for price, touches in _cluster(lows, tolerance) if price <= current]
+    resistances = [(price, touches) for price, touches in _cluster(highs, tolerance) if price >= current]
 
     supports.sort(key=lambda item: (item[1], -abs(current - item[0])), reverse=True)
     resistances.sort(key=lambda item: (item[1], -abs(current - item[0])), reverse=True)
 
     return SupportResistanceSnapshot(
-        supports=tuple(
-            Level(price, "support", touches, abs(current - price))
-            for price, touches in supports[:max_levels]
-        ),
-        resistances=tuple(
-            Level(price, "resistance", touches, abs(current - price))
-            for price, touches in resistances[:max_levels]
-        ),
+        supports=tuple(Level(price, "support", touches, abs(current - price)) for price, touches in supports[:max_levels]),
+        resistances=tuple(Level(price, "resistance", touches, abs(current - price)) for price, touches in resistances[:max_levels]),
     )

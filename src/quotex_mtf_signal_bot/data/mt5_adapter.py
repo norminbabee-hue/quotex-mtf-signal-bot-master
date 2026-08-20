@@ -32,12 +32,7 @@ class MarketDataAdapter(Protocol):
 
 
 class MT5Adapter:
-    """Thin MT5 integration boundary.
-
-    The adapter keeps broker/platform access isolated from analysis logic. The
-    actual MetaTrader5 package is imported only when the adapter is constructed,
-    so tests can run without a terminal connection.
-    """
+    """Thin MT5 integration boundary."""
 
     def __init__(self, *, login: int | None = None, password: str | None = None,
                  server: str | None = None, path: str | None = None) -> None:
@@ -46,9 +41,7 @@ class MT5Adapter:
         except ImportError as exc:
             raise RuntimeError("Install the MetaTrader5 Python package before using live MT5 data") from exc
         self._mt5 = mt5
-        kwargs = {}
-        if path:
-            kwargs["path"] = path
+        kwargs = {"path": path} if path else {}
         if not mt5.initialize(**kwargs):
             raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
         if login is not None:
@@ -59,6 +52,12 @@ class MT5Adapter:
 
     def close(self) -> None:
         self._mt5.shutdown()
+
+    def symbols(self) -> list[str]:
+        raw = self._mt5.symbols_get()
+        if raw is None:
+            raise RuntimeError(f"MT5 symbols_get failed: {self._mt5.last_error()}")
+        return [item.name for item in raw]
 
     @staticmethod
     def _utc(timestamp_seconds: int | float) -> datetime:
@@ -79,14 +78,10 @@ class MT5Adapter:
             raise RuntimeError(f"No MT5 bars available for {symbol}/{timeframe}: {self._mt5.last_error()}")
         return [
             MT5Bar(
-                symbol=symbol,
-                timeframe=timeframe,
+                symbol=symbol, timeframe=timeframe,
                 timestamp_utc=self._utc(row["time"]),
-                open=Decimal(str(row["open"])),
-                high=Decimal(str(row["high"])),
-                low=Decimal(str(row["low"])),
-                close=Decimal(str(row["close"])),
+                open=Decimal(str(row["open"])), high=Decimal(str(row["high"])),
+                low=Decimal(str(row["low"])), close=Decimal(str(row["close"])),
                 tick_volume=int(row["tick_volume"]),
-            )
-            for row in raw
+            ) for row in raw
         ]

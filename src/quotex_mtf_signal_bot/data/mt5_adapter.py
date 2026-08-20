@@ -5,14 +5,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Protocol
 
-
 @dataclass(frozen=True, slots=True)
 class Tick:
     symbol: str
     timestamp_utc: datetime
     bid: Decimal
     ask: Decimal
-
 
 @dataclass(frozen=True, slots=True)
 class MT5Bar:
@@ -25,17 +23,14 @@ class MT5Bar:
     close: Decimal
     tick_volume: int
 
-
 class MarketDataAdapter(Protocol):
     def latest_tick(self, symbol: str) -> Tick: ...
     def bars(self, symbol: str, timeframe: str, count: int) -> list[MT5Bar]: ...
-
+    def symbols(self) -> list[str]: ...
 
 class MT5Adapter:
     """Thin MT5 integration boundary."""
-
-    def __init__(self, *, login: int | None = None, password: str | None = None,
-                 server: str | None = None, path: str | None = None) -> None:
+    def __init__(self, *, login: int | None = None, password: str | None = None, server: str | None = None, path: str | None = None) -> None:
         try:
             import MetaTrader5 as mt5
         except ImportError as exc:
@@ -76,12 +71,4 @@ class MT5Adapter:
         raw = self._mt5.copy_rates_from_pos(symbol, tf, 0, count)
         if raw is None:
             raise RuntimeError(f"No MT5 bars available for {symbol}/{timeframe}: {self._mt5.last_error()}")
-        return [
-            MT5Bar(
-                symbol=symbol, timeframe=timeframe,
-                timestamp_utc=self._utc(row["time"]),
-                open=Decimal(str(row["open"])), high=Decimal(str(row["high"])),
-                low=Decimal(str(row["low"])), close=Decimal(str(row["close"])),
-                tick_volume=int(row["tick_volume"]),
-            ) for row in raw
-        ]
+        return [MT5Bar(symbol=symbol, timeframe=timeframe, timestamp_utc=self._utc(row["time"]), open=Decimal(str(row["open"])), high=Decimal(str(row["high"])), low=Decimal(str(row["low"])), close=Decimal(str(row["close"])), tick_volume=int(row["tick_volume"])) for row in raw]

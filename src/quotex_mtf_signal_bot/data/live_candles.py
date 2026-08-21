@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from quotex_mtf_signal_bot.data.candle_builder import CandleBuilder, LiveCandle
-from quotex_mtf_signal_bot.data.mt5_adapter import MarketDataAdapter, Tick
+from quotex_mtf_signal_bot.data.mt5_adapter import MT5Bar, MarketDataAdapter, Tick
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +36,19 @@ class LiveCandleManager:
                 closed.append(CandleCloseEvent(completed))
         return closed
 
-    def seed_history(self, count: int = 100) -> None:
-        """Validate that MT5 can provide history before live processing starts."""
+    def seed_history(self, count: int = 100) -> dict[str, list[MT5Bar]]:
+        """Load and return recent history so the signal service can start immediately.
+
+        MT5 history contains the currently-forming zero bar as well as completed
+        bars. The signal service removes that incomplete bar before using the
+        history for analysis.
+        """
+        history: dict[str, list[MT5Bar]] = {}
         for timeframe in self.TIMEFRAMES:
             bars = self.adapter.bars(self.symbol, timeframe, count)
             if len(bars) < count:
-                raise RuntimeError(f"Insufficient MT5 {timeframe} history: expected {count}, got {len(bars)}")
+                raise RuntimeError(
+                    f"Insufficient MT5 {timeframe} history: expected {count}, got {len(bars)}"
+                )
+            history[timeframe] = bars
+        return history

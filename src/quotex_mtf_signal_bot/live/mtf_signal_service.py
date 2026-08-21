@@ -7,19 +7,15 @@ from quotex_mtf_signal_bot.analysis.mtf import analyze_mtf
 from quotex_mtf_signal_bot.core.models import Candle, Timeframe
 from quotex_mtf_signal_bot.data.candle_builder import LiveCandle
 from quotex_mtf_signal_bot.data.mt5_adapter import MT5Bar
+from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 from quotex_mtf_signal_bot.signals.model import Signal, build_signal
 
 
 class LiveMTFSignalService:
-    """Turn completed M1/M5/M15 candles into live signals.
-
-    The service can be seeded with broker history before ticks start. This is
-    important for a multi-pair scanner: every pair gets a real M1/M5/M15
-    context immediately instead of waiting through 15 minutes of empty state.
-    """
+    """Turn completed M1/M5/M15 candles into live signals for one FX pair."""
 
     def __init__(self, symbol: str, history_size: int = 200) -> None:
-        self.symbol = symbol
+        self.symbol = SymbolRegistry.canonical_symbol(symbol) or symbol
         self.history: dict[Timeframe, deque[Candle]] = {
             Timeframe.M1: deque(maxlen=history_size),
             Timeframe.M5: deque(maxlen=history_size),
@@ -35,11 +31,10 @@ class LiveMTFSignalService:
         except KeyError as exc:
             raise ValueError(f"Unsupported live timeframe: {seconds}s") from exc
 
-    @staticmethod
-    def _to_candle(live: LiveCandle) -> Candle:
+    def _to_candle(self, live: LiveCandle) -> Candle:
         return Candle(
-            symbol=live.symbol,
-            timeframe=LiveMTFSignalService._timeframe(live.timeframe_seconds),
+            symbol=self.symbol,
+            timeframe=self._timeframe(live.timeframe_seconds),
             timestamp_utc=live.open_time_utc,
             open=live.open,
             high=live.high,
@@ -47,13 +42,10 @@ class LiveMTFSignalService:
             close=live.close,
         )
 
-    @staticmethod
-    def _history_bar_to_candle(bar: MT5Bar) -> Candle:
+    def _history_bar_to_candle(self, bar: MT5Bar) -> Candle:
         return Candle(
-            symbol=bar.symbol,
-            timeframe=LiveMTFSignalService._timeframe(
-                {"M1": 60, "M5": 300, "M15": 900}[bar.timeframe]
-            ),
+            symbol=self.symbol,
+            timeframe=self._timeframe({"M1": 60, "M5": 300, "M15": 900}[bar.timeframe]),
             timestamp_utc=bar.timestamp_utc,
             open=bar.open,
             high=bar.high,
@@ -66,10 +58,6 @@ class LiveMTFSignalService:
         for label, bars in history.items():
             timeframe = self._timeframe({"M1": 60, "M5": 300, "M15": 900}[label])
             completed = sorted(bars, key=lambda bar: bar.timestamp_utc)
-            # copy_rates_from_pos includes the current bar at the end on normal
-            # MT5 feeds. Keep only bars that are already closed by taking all but
-            # the newest bar; if a fixture is already closed, the extra bar is
-            # harmless because the live stream replaces it at the next close.
             if len(completed) > 1:
                 completed = completed[:-1]
             self.history[timeframe].clear()
@@ -77,14 +65,12 @@ class LiveMTFSignalService:
                 self.history[timeframe].append(self._history_bar_to_candle(bar))
 
     def on_closed_candle(self, live: LiveCandle) -> Signal | None:
-        if live.symbol != self.symbol:
+        if SymbolRegistry.canonical_symbol(live.symbol) != self.symbol:
             return None
         timeframe = self._timeframe(live.timeframe_seconds)
         candle = self._to_candle(live)
         self.history[timeframe].append(candle)
 
-        # Signals are evaluated only on M1 close. This prevents three signals
-        # from being generated for the same market moment.
         if timeframe is not Timeframe.M1:
             return None
 

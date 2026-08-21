@@ -16,7 +16,7 @@ class ScannerSnapshot:
 
 
 class MultiPairScanner:
-    """Run the same M1/M5/M15 signal pipeline independently for each FX pair."""
+    """Run the same closed-candle M1/M5/M15 pipeline for every FX pair."""
 
     def __init__(
         self,
@@ -37,8 +37,10 @@ class MultiPairScanner:
         return ScannerSnapshot(symbols)
 
     def warm_up(self, history_count: int = 200) -> None:
-        for manager in self.managers.values():
-            manager.seed_history(history_count)
+        """Seed every pair from MT5 before the first live tick is processed."""
+        for symbol, manager in self.managers.items():
+            history = manager.seed_history(history_count)
+            self.services[symbol].seed_history(history)
 
     def on_tick(self, tick: Tick) -> None:
         manager = self.managers.get(tick.symbol)

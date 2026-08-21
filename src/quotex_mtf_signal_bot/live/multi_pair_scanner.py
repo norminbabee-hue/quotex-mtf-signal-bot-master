@@ -16,29 +16,30 @@ class ScannerSnapshot:
 
 
 class MultiPairScanner:
-    """Run the closed-candle M1/M5/M15 pipeline for every broker FX symbol.
+    """Run the closed-candle M1/M5/M15 pipeline for every canonical FX pair.
 
-    The universe is discovered at runtime from MT5, so the scanner is not
-    limited to a hard-coded major-pair list. Broker suffixes and OTC-style
-    names are preserved exactly as supplied by the broker.
+    The public universe uses clean six-letter currency-pair names. MT5 broker
+    suffixes are kept only in SymbolRegistry's internal routing map, so a
+    Quotex-style ``-OTC`` suffix never changes pair identity or excludes it.
     """
 
-    def __init__(
-        self,
-        adapter: MarketDataAdapter,
-        on_signal: Callable[[Signal], None],
-    ) -> None:
+    def __init__(self, adapter: MarketDataAdapter, on_signal: Callable[[Signal], None]) -> None:
         self.adapter = adapter
         self.on_signal = on_signal
         self.registry = SymbolRegistry.from_mt5(adapter)
         self.managers: dict[str, LiveCandleManager] = {}
         self.services: dict[str, LiveMTFSignalService] = {}
+        self._broker_symbols: dict[str, str] = {}
         self.refresh()
 
     def refresh(self) -> ScannerSnapshot:
         self.registry = SymbolRegistry.from_mt5(self.adapter)
         symbols = self.registry.symbols
-        self.managers = {symbol: LiveCandleManager(self.adapter, symbol) for symbol in symbols}
+        self._broker_symbols = {symbol: self.registry.broker_symbol(symbol) for symbol in symbols}
+        self.managers = {
+            symbol: LiveCandleManager(self.adapter, self._broker_symbols[symbol])
+            for symbol in symbols
+        }
         self.services = {symbol: LiveMTFSignalService(symbol) for symbol in symbols}
         return ScannerSnapshot(symbols)
 
@@ -49,9 +50,15 @@ class MultiPairScanner:
             self.services[symbol].seed_history(history)
 
     def on_tick(self, tick: Tick) -> None:
-        manager = self.managers.get(tick.symbol)
-        service = self.services.get(tick.symbol)
-        if manager is None or service is None:
+        canonical = SymbolRegistry.canonical_symbol(tick.symbol)
+        if canonical is None:
+            return
+        broker_symbol = self._broker_symbols.get(canonical)
+        service = self.services.get(canonical)
+        manager = self.managers.get(canonical)
+        if broker_symbol is None or service is None or manager is None:
+            return
+        if tick.symbol != broker_symbol:
             return
         for event in manager.on_tick(tick):
             signal = service.on_closed_candle(event.candle)

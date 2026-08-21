@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from quotex_mtf_signal_bot.backtest.engine import BacktestReport
+from quotex_mtf_signal_bot.core.models import Timeframe
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,16 +87,21 @@ def run_dashboard() -> None:
     with controls[0]:
         symbol = st.selectbox("Pair", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"], index=0)
     with controls[1]:
-        timeframe = st.selectbox("Timeframe", ["M1", "M5", "M15"], index=0)
+        timeframe_label = st.selectbox("Timeframe", ["M1", "M5", "M15"], index=0)
+        evaluation_timeframe = Timeframe(timeframe_label)
     with controls[2]:
         run_backtest_clicked = st.button("Run MT5 backtest", use_container_width=True)
 
     if run_backtest_clicked:
-        with st.spinner(f"Running {symbol} M1/M5/M15 backtest from MT5..."):
+        with st.spinner(f"Running {symbol} {timeframe_label} backtest from MT5..."):
             try:
                 from quotex_mtf_signal_bot.backtest.mt5_backtest import run_mt5_backtest
 
-                output = run_mt5_backtest(symbol, output_path=data_path)
+                output = run_mt5_backtest(
+                    symbol,
+                    evaluation_timeframe=evaluation_timeframe,
+                    output_path=data_path,
+                )
                 st.success(f"Backtest complete. Results saved to {output}")
                 st.rerun()
             except Exception as exc:

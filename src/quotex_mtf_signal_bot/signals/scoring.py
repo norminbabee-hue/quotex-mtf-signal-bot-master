@@ -13,6 +13,7 @@ class SignalScore:
     score: int
     confidence: Decimal
     reasons: tuple[str, ...]
+    next_candle_direction: str | None = None
 
 
 # Quality-first threshold. Confidence is deliberately a model-strength score,
@@ -44,15 +45,61 @@ def _reject_near_opposing_level(entry, direction: str) -> bool:
     return (nearest.distance / current_price) < MIN_OPPOSING_LEVEL_DISTANCE
 
 
-def score_mtf(analysis: MTFAnalysis) -> SignalScore:
-    """Score a live M1 entry using closed M1/M5/M15 confirmation.
+def _next_candle_prediction(analysis: MTFAnalysis) -> tuple[str, int, list[str]]:
+    """Predict the next M1 candle from only information closed at entry time.
 
-    M15 and M5 are the directional context. M1 is the entry trigger, so a
-    neutral M1 trend is allowed when price action produces a fresh trigger in
-    the same direction as the higher-timeframe context. An explicitly
-    opposite M1 trend is still rejected. This avoids missing valid pullback
-    entries while keeping weak/conflicting setups out of the live signal feed.
+    This is intentionally separate from the higher-timeframe trend. The
+    prediction combines M1 momentum/price action with M5/M15 context, so a
+    bearish market can still produce an UP prediction when a strong bullish
+    M1 reversal trigger is present, and vice versa.
     """
+    m1 = analysis.analyses[Timeframe.M1]
+    m5 = analysis.analyses[Timeframe.M5]
+    m15 = analysis.analyses[Timeframe.M15]
+    up = down = 0
+    reasons: list[str] = []
+
+    for item, weight in ((m15, 2), (m5, 2), (m1, 1)):
+        if item.trend == "bullish":
+            up += item.score * weight
+        elif item.trend == "bearish":
+            down += item.score * weight
+
+    ind = m1.indicators
+    pa = m1.price_action
+    if ind.ema_fast is not None and ind.ema_slow is not None:
+        if ind.ema_fast > ind.ema_slow:
+            up += 2
+            reasons.append("M1 EMA momentum points UP")
+        elif ind.ema_fast < ind.ema_slow:
+            down += 2
+            reasons.append("M1 EMA momentum points DOWN")
+    if ind.macd_histogram is not None:
+        if ind.macd_histogram > 0:
+            up += 2
+            reasons.append("M1 MACD points UP")
+        elif ind.macd_histogram < 0:
+            down += 2
+            reasons.append("M1 MACD points DOWN")
+    if ind.rsi is not None:
+        if ind.rsi >= RSI_LONG_CONFIRM and ind.rsi < RSI_LONG_MAX:
+            up += 1
+            reasons.append("RSI supports UP")
+        elif ind.rsi <= RSI_SHORT_CONFIRM and ind.rsi > RSI_SHORT_MIN:
+            down += 1
+            reasons.append("RSI supports DOWN")
+    if pa.bullish_engulfing or pa.bullish_rejection or pa.momentum_bullish:
+        up += 3
+        reasons.append("Fresh bullish M1 price action")
+    if pa.bearish_engulfing or pa.bearish_rejection or pa.momentum_bearish:
+        down += 3
+        reasons.append("Fresh bearish M1 price action")
+
+    return ("CALL", up, reasons) if up > down else ("PUT", down, reasons)
+
+
+def score_mtf(analysis: MTFAnalysis) -> SignalScore:
+    """Score a live M1 entry using closed M1/M5/M15 confirmation."""
     required = (Timeframe.M1, Timeframe.M5, Timeframe.M15)
     if any(timeframe not in analysis.analyses for timeframe in required):
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Missing M1/M5/M15 analysis",))
@@ -67,8 +114,6 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     direction = "CALL" if analysis.alignment == "bullish" else "PUT"
     expected_trend = analysis.alignment
 
-    # Higher timeframes must agree. M1 is an entry timeframe and may be
-    # neutral during a pullback, but it may never be actively opposite.
     if context.trend != expected_trend or confirmation.trend != expected_trend:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15/M5 trend confirmation is incomplete",))
     if entry.trend not in {expected_trend, "neutral"}:
@@ -80,15 +125,21 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     if entry.trend == expected_trend and entry.score < MIN_M1_TREND_SCORE:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M1 trend evidence is too weak",))
 
-    # A neutral M1 is a pullback/setup state rather than a directional trend.
-    # Give it a small base contribution only after a fresh trigger is proven.
+    predicted_direction, prediction_score, prediction_reasons = _next_candle_prediction(analysis)
+    # The actual signal must agree with the next-candle model. This prevents
+    # simply echoing M15/M5 direction when M1 predicts a reversal.
+    if predicted_direction != direction:
+        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Next M1 candle prediction conflicts with MTF context",))
+
     effective_entry_score = entry.score if entry.trend == expected_trend else 2
     points = context.score + confirmation.score + effective_entry_score
     reasons: list[str] = [
         f"MTF alignment: {analysis.alignment}",
         "M15 context confirms",
         "M5 confirms",
+        f"Next M1 candle: {'UP' if predicted_direction == 'CALL' else 'DOWN'}",
     ]
+    reasons.extend(prediction_reasons)
     if entry.trend == expected_trend:
         reasons.append("M1 entry trend confirms")
     else:
@@ -158,4 +209,4 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Signal score below live threshold",))
 
     confidence = min(Decimal(90), Decimal(75) + Decimal(max(0, points - MIN_ALIGNMENT_SCORE) * 2))
-    return SignalScore(direction, points, confidence, tuple(reasons))
+    return SignalScore(direction, points, confidence, tuple(reasons), predicted_direction)

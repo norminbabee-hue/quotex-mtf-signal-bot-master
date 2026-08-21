@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 
 # Canonical FX universe from the user's Quotex watch-list screenshots.
-# The live scanner intersects this list with the connected MT5 symbols, so
-# broker-only pairs that are not in the Quotex watch-list are never analyzed.
+# It remains available as an explicit restriction for callers that want the
+# screenshot-only universe, while the default runtime discovery is dynamic.
 QUOTEX_WATCHLIST = (
     "AUDNZD",
     "USDIDR",
@@ -107,7 +107,7 @@ CURRENCY_CODES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class SymbolRegistry:
-    """Runtime symbol universe constrained to the configured Quotex watch-list."""
+    """Runtime FX symbol universe discovered from the connected MT5 feed."""
 
     symbols: tuple[str, ...]
 
@@ -129,19 +129,26 @@ class SymbolRegistry:
     def from_mt5(
         cls,
         adapter,
-        candidates: tuple[str, ...] | None = QUOTEX_WATCHLIST,
+        candidates: tuple[str, ...] | None = None,
     ) -> "SymbolRegistry":
-        """Resolve only configured Quotex pairs against the connected MT5 feed.
+        """Discover every broker-provided FX symbol by default.
 
-        If ``candidates`` is omitted, the scanner uses the Quotex watch-list
-        captured from the user's screenshots. An explicit candidates tuple is
-        still supported for tests or another deliberately restricted universe.
-        Broker suffixes and OTC-style names are preserved exactly as supplied
-        by MT5 when a configured canonical pair is found.
+        With no explicit ``candidates`` restriction, every MT5 symbol whose
+        first two 3-letter blocks are recognised currency codes is included.
+        Broker suffixes and OTC-style names are preserved exactly, so symbols
+        such as ``GBPUSDm``, ``EURUSDm`` and ``AUDNZD-OTC`` are all retained.
+
+        An explicit candidates tuple still restricts the result to the
+        requested canonical pairs, which keeps the screenshot-only Quotex
+        universe available via ``candidates=QUOTEX_WATCHLIST``.
         """
         available = tuple(dict.fromkeys(str(name) for name in adapter.symbols()))
-        requested = tuple(str(item).upper() for item in candidates or ())
 
+        if candidates is None:
+            resolved = [name for name in available if cls._currency_pair(name) is not None]
+            return cls(tuple(sorted(set(resolved))))
+
+        requested = tuple(str(item).upper() for item in candidates)
         resolved: list[str] = []
         for canonical in requested:
             exact = next((name for name in available if name.upper() == canonical), None)

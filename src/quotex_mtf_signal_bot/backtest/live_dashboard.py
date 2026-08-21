@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import timezone
 from typing import Any
 
 from quotex_mtf_signal_bot.analysis.mtf import analyze_mtf
@@ -51,15 +50,20 @@ def scan_live_pairs(adapter: MT5Adapter, history_count: int = 120) -> list[dict[
             candles = {timeframe: _to_candles(bars) for timeframe, bars in raw.items()}
             analysis = analyze_mtf(candles)
             score = score_mtf(analysis)
-            expiry = choose_expiry(analysis)
             latest = candles[Timeframe.M1][-1]
+
+            if score.direction == "NO_SIGNAL":
+                expiry_value = "—"
+            else:
+                expiry_value = choose_expiry(analysis).expiry.value
+
             rows.append(
                 {
                     "pair": symbol,
                     "signal": score.direction,
                     "score": score.score,
                     "confidence": f"{score.confidence:.0f}%",
-                    "expiry": expiry.expiry.value if score.direction != "NO_SIGNAL" else "—",
+                    "expiry": expiry_value,
                     "closed_at": latest.timestamp_utc.astimezone(timezone.utc).isoformat(),
                     "reason": " | ".join(score.reasons),
                 }

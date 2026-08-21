@@ -9,7 +9,7 @@ class FakeAdapter:
         return self._symbols
 
 
-def test_registry_discovers_real_currency_pairs_and_broker_suffixes():
+def test_registry_normalizes_all_fx_pairs_and_ignores_broker_suffixes():
     adapter = FakeAdapter(
         [
             "EURUSD",
@@ -26,25 +26,34 @@ def test_registry_discovers_real_currency_pairs_and_broker_suffixes():
     registry = SymbolRegistry.from_mt5(adapter)
 
     assert registry.symbols == (
+        "AUDNZD",
         "EURUSD",
-        "EURUSDm",
-        "GBPUSDm",
+        "GBPUSD",
         "USDINR",
         "USDJPY",
     )
+    assert registry.broker_symbol("AUDNZD") == "AUDNZD-OTC"
+    assert registry.broker_symbol("GBPUSD") == "GBPUSDm"
 
 
-def test_registry_can_explicitly_include_otc_for_research():
+def test_otc_flag_is_ignored_and_otc_suffix_does_not_remove_pair():
     adapter = FakeAdapter(["EURUSDm", "USDJPY", "AUDNZD-OTC", "XAUUSD"])
 
-    registry = SymbolRegistry.from_mt5(adapter, include_otc=True)
+    without_flag = SymbolRegistry.from_mt5(adapter)
+    with_flag = SymbolRegistry.from_mt5(adapter, include_otc=True)
 
-    assert registry.symbols == ("AUDNZD-OTC", "EURUSDm", "USDJPY")
+    assert without_flag.symbols == ("AUDNZD", "EURUSD", "USDJPY")
+    assert with_flag.symbols == without_flag.symbols
 
 
-def test_registry_can_still_use_explicit_canonical_candidates():
+def test_registry_uses_canonical_candidates():
     adapter = FakeAdapter(["EURUSDm", "USDJPY", "AUDNZD-OTC", "XAUUSD"])
 
-    registry = SymbolRegistry.from_mt5(adapter, candidates=("EURUSD", "AUDNZD", "GBPUSD"))
+    registry = SymbolRegistry.from_mt5(
+        adapter,
+        candidates=("EURUSD", "AUDNZD", "GBPUSD"),
+    )
 
-    assert registry.symbols == ("EURUSDm",)
+    assert registry.symbols == ("AUDNZD", "EURUSD")
+    assert registry.broker_symbol("AUDNZD") == "AUDNZD-OTC"
+    assert registry.broker_symbol("EURUSD") == "EURUSDm"

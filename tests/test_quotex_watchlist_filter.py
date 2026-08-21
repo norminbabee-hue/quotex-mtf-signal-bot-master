@@ -9,7 +9,7 @@ class FakeAdapter:
         return self._symbols
 
 
-def test_default_registry_excludes_mt5_pairs_not_in_quotex_watchlist():
+def test_default_registry_discovers_all_available_fx_pairs():
     adapter = FakeAdapter(
         [
             "AUDNZD",
@@ -29,23 +29,23 @@ def test_default_registry_excludes_mt5_pairs_not_in_quotex_watchlist():
     assert registry.symbols == (
         "AUDNZD",
         "EURUSD",
-        "GBPUSDm",
+        "EURTRY",
+        "GBPUSD",
         "USDINR",
         "USDJPY",
+        "USDTRY",
     )
-
-    assert "USDTRY" not in registry.symbols
-    assert "EURTRY" not in registry.symbols
     assert "XAUUSD" not in registry.symbols
     assert "US30" not in registry.symbols
 
 
-def test_configured_quotex_pairs_keep_broker_suffixes():
+def test_quotex_suffix_does_not_change_pair_identity():
     adapter = FakeAdapter(["EURUSDm", "AUDNZD-OTC", "USDJPY", "GBPUSDm"])
 
     registry = SymbolRegistry.from_mt5(adapter)
 
-    assert "EURUSDm" in registry.symbols
-    assert "AUDNZD-OTC" in registry.symbols
-    assert "USDJPY" in registry.symbols
-    assert "GBPUSDm" in registry.symbols
+    assert registry.symbols == ("AUDNZD", "EURUSD", "GBPUSD", "USDJPY")
+    assert registry.broker_symbol("AUDNZD") == "AUDNZD-OTC"
+    assert registry.broker_symbol("EURUSD") == "EURUSDm"
+    assert registry.broker_symbol("GBPUSD") == "GBPUSDm"
+    assert registry.broker_symbol("USDJPY") == "USDJPY"

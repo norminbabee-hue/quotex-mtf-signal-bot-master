@@ -24,14 +24,16 @@ MIN_OPPOSING_LEVEL_DISTANCE = Decimal("0.0005")  # 0.05% of price
 
 def _reject_near_opposing_level(entry, direction: str) -> bool:
     """Avoid entries with little room before the nearest opposing level."""
-    price = entry.levels.supports if direction == "CALL" else entry.levels.resistances
-    if not price:
+    levels = entry.levels.resistances if direction == "CALL" else entry.levels.supports
+    if not levels:
         return False
 
-    nearest = min(price, key=lambda level: level.distance)
+    nearest = min(levels, key=lambda level: level.distance)
     if nearest.distance <= 0:
         return True
 
+    # Level.distance is absolute price distance. Convert it to a relative
+    # distance using the implied current price from the level + distance.
     current_price = nearest.price + nearest.distance
     if current_price == 0:
         return False
@@ -121,6 +123,8 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     points += 2
     reasons.append("M1 price action confirms entry")
 
+    # For CALL, the opposing level is resistance above price.
+    # For PUT, the opposing level is support below price.
     if _reject_near_opposing_level(entry, direction):
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Too close to opposing support/resistance",))
 

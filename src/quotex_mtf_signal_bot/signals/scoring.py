@@ -96,28 +96,45 @@ def _next_candle_prediction(analysis: MTFAnalysis) -> tuple[str, int, list[str]]
     return ("CALL", up, reasons) if up > down else ("PUT", down, reasons)
 
 
+def _no_signal(reason: str, next_direction: str | None = None, score: int = 0) -> SignalScore:
+    """Keep the next-candle direction visible even when trade gating rejects it."""
+    return SignalScore(
+        "NO_SIGNAL",
+        score,
+        Decimal(0),
+        (reason,),
+        next_direction,
+    )
+
+
 def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     """Score a live entry as a prediction of the NEXT closed M1 candle."""
     required = (Timeframe.M1, Timeframe.M5, Timeframe.M15)
     if any(timeframe not in analysis.analyses for timeframe in required):
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Missing M1/M5/M15 analysis",))
+        return _no_signal("Missing M1/M5/M15 analysis")
+
+    # Calculate the next-candle direction independently from the stricter
+    # trade-signal gates. This lets the UI answer the user's actual question
+    # (next candle UP/DOWN) even when the setup is not strong enough to be an
+    # actionable signal.
+    predicted_direction, prediction_score, prediction_reasons = _next_candle_prediction(analysis)
+    visible_prediction = None if predicted_direction == "NO_SIGNAL" else predicted_direction
 
     entry = analysis.analyses[Timeframe.M1]
     confirmation = analysis.analyses[Timeframe.M5]
     context = analysis.analyses[Timeframe.M15]
 
-    # Higher-timeframe regime must be coherent; M1 may reverse briefly because
-    # the target is specifically the next M1 candle.
+    # Higher-timeframe regime must be coherent for an actionable signal. The
+    # next-candle prediction itself is still exposed above when this gate fails.
     if context.trend not in {"bullish", "bearish"} or confirmation.trend != context.trend:
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15/M5 trend confirmation is incomplete",))
+        return _no_signal("M15/M5 trend confirmation is incomplete", visible_prediction, prediction_score)
     if context.score < MIN_M15_TREND_SCORE:
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15 context is not strong enough",))
+        return _no_signal("M15 context is not strong enough", visible_prediction, prediction_score)
     if confirmation.score < MIN_M5_TREND_SCORE:
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M5 confirmation is not strong enough",))
+        return _no_signal("M5 confirmation is not strong enough", visible_prediction, prediction_score)
 
-    predicted_direction, prediction_score, prediction_reasons = _next_candle_prediction(analysis)
     if predicted_direction == "NO_SIGNAL":
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), tuple(prediction_reasons))
+        return _no_signal(" | ".join(prediction_reasons), None, 0)
     direction = predicted_direction
 
     points = context.score + confirmation.score + prediction_score
@@ -131,7 +148,7 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
 
     if entry.trend == context.trend:
         if entry.score < MIN_M1_TREND_SCORE:
-            return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M1 trend evidence is too weak",))
+            return _no_signal("M1 trend evidence is too weak", direction, prediction_score)
         points += 2
         reasons.append("M1 trend agrees with context")
     elif entry.trend == "neutral":
@@ -146,9 +163,9 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
 
     if indicators.rsi is not None:
         if direction == "CALL" and indicators.rsi >= RSI_LONG_MAX:
-            return SignalScore("NO_SIGNAL", 0, Decimal(0), ("RSI is too extended for UP",))
+            return _no_signal("RSI is too extended for UP", direction, prediction_score)
         if direction == "PUT" and indicators.rsi <= RSI_SHORT_MIN:
-            return SignalScore("NO_SIGNAL", 0, Decimal(0), ("RSI is too extended for DOWN",))
+            return _no_signal("RSI is too extended for DOWN", direction, prediction_score)
         if (direction == "CALL" and indicators.rsi >= RSI_LONG_CONFIRM) or (
             direction == "PUT" and indicators.rsi <= RSI_SHORT_CONFIRM
         ):
@@ -191,19 +208,19 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     )
 
     if not pattern_agrees and not fresh_momentum and not candle_agrees:
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M1 has no fresh directional trigger",))
+        return _no_signal("M1 has no fresh directional trigger", direction, prediction_score)
 
     points += 2 if pattern_agrees else 1
     reasons.append("Fresh M1 price-action trigger")
 
     if _reject_near_opposing_level(entry, direction):
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Too close to opposing support/resistance",))
+        return _no_signal("Too close to opposing support/resistance", direction, prediction_score)
 
     points += 1
     reasons.append("Adequate room from opposing level")
 
     if points < MIN_ALIGNMENT_SCORE:
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("Signal score below live threshold",))
+        return _no_signal("Signal score below live threshold", direction, points)
 
     confidence = min(Decimal(90), Decimal(75) + Decimal(max(0, points - MIN_ALIGNMENT_SCORE) * 2))
     return SignalScore(direction, points, confidence, tuple(reasons), direction)

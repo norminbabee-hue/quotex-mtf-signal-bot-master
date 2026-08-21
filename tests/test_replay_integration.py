@@ -22,15 +22,28 @@ def make_candles(timeframe: Timeframe, count: int, step: str = "0.00010") -> lis
     ]
 
 
-def test_replay_uses_only_closed_history():
+def test_replay_uses_timestamp_aligned_closed_history():
     candles = {
-        Timeframe.M1: make_candles(Timeframe.M1, 90),
-        Timeframe.M5: make_candles(Timeframe.M5, 90),
-        Timeframe.M15: make_candles(Timeframe.M15, 90),
+        Timeframe.M1: make_candles(Timeframe.M1, 1000),
+        Timeframe.M5: make_candles(Timeframe.M5, 200),
+        Timeframe.M15: make_candles(Timeframe.M15, 100),
     }
     signals = generate_signals(candles, symbol="EURUSD")
     assert signals
-    assert all(signal.entry_time_utc > candles[Timeframe.M1][59].timestamp_utc for signal in signals)
+    assert all(signal.entry_time_utc > candles[Timeframe.M1][899].timestamp_utc for signal in signals[-1:])
+
+
+def test_replay_does_not_use_future_higher_timeframe_candles():
+    candles = {
+        Timeframe.M1: make_candles(Timeframe.M1, 100),
+        Timeframe.M5: make_candles(Timeframe.M5, 100),
+        Timeframe.M15: make_candles(Timeframe.M15, 100),
+    }
+    signals = generate_signals(candles, symbol="EURUSD")
+    assert all(
+        signal.entry_time_utc >= datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+        for signal in signals
+    )
 
 
 def test_replay_does_not_generate_before_all_timeframes_have_history():

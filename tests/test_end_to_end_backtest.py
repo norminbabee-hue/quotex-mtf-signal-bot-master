@@ -55,6 +55,9 @@ def test_full_replay_to_backtest_pipeline():
     report = run_backtest(signals, data[Timeframe.M1])
 
     assert signals
+    assert len(signals) < 100, "Selective scoring should not emit a signal on most M1 candles"
+    assert all(signal.confidence <= Decimal("90") for signal in signals)
+    assert all(signal.score >= 12 for signal in signals)
     assert report.total <= len(signals)
     assert report.wins + report.losses + report.ties == report.total
     assert report.win_rate >= Decimal(0)

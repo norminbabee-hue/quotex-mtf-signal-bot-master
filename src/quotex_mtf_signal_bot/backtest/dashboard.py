@@ -78,21 +78,33 @@ def run_dashboard() -> None:
     )
 
     st.title("📊 Backtest Performance")
-    st.caption("A local dashboard for reviewing historical signal results. It does not execute trades.")
+    st.caption("Local research dashboard. It does not execute real-money trades.")
 
     data_path = _project_root() / "data" / "backtest.json"
-    data = _load_dashboard_data(data_path)
-    metrics = data.get("metrics") or {}
-    trades = data.get("trades") or []
 
     controls = st.columns([1, 1, 1])
     with controls[0]:
-        st.selectbox("Pair", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"], index=0)
+        symbol = st.selectbox("Pair", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"], index=0)
     with controls[1]:
-        st.selectbox("Timeframe", ["M1", "M5", "M15"], index=0)
+        timeframe = st.selectbox("Timeframe", ["M1", "M5", "M15"], index=0)
     with controls[2]:
-        if st.button("Refresh metrics", use_container_width=True):
-            st.rerun()
+        run_backtest_clicked = st.button("Run MT5 backtest", use_container_width=True)
+
+    if run_backtest_clicked:
+        with st.spinner(f"Running {symbol} M1/M5/M15 backtest from MT5..."):
+            try:
+                from quotex_mtf_signal_bot.backtest.mt5_backtest import run_mt5_backtest
+
+                output = run_mt5_backtest(symbol, output_path=data_path)
+                st.success(f"Backtest complete. Results saved to {output}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Backtest could not run: {exc}")
+                st.info("Make sure the MetaTrader 5 desktop terminal is installed, open, and logged into the intended account/feed.")
+
+    data = _load_dashboard_data(data_path)
+    metrics = data.get("metrics") or {}
+    trades = data.get("trades") or []
 
     st.divider()
 
@@ -116,7 +128,7 @@ def run_dashboard() -> None:
         recent = list(reversed(trades[-50:]))
         st.dataframe(recent, use_container_width=True, hide_index=True)
     else:
-        st.info(f"No backtest data loaded yet. Expected data file: {data_path}")
+        st.info(f"No backtest data loaded yet. Click 'Run MT5 backtest' to generate it. Expected file: {data_path}")
 
 
 if __name__ == "__main__":

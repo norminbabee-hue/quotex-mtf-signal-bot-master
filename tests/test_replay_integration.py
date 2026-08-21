@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from quotex_mtf_signal_bot.backtest.replay import generate_signals
 from quotex_mtf_signal_bot.core.models import Candle, Timeframe
+from quotex_mtf_signal_bot.signals.model import Signal
 
 
 def make_candles(timeframe: Timeframe, count: int, step: str = "0.00010") -> list[Candle]:
@@ -22,7 +23,19 @@ def make_candles(timeframe: Timeframe, count: int, step: str = "0.00010") -> lis
     ]
 
 
-def test_replay_uses_timestamp_aligned_closed_history():
+def _stub_signal(symbol: str, entry_time_utc, _analysis) -> Signal:
+    """Keep replay tests focused on timestamp/history behavior, not scoring."""
+    return Signal(
+        symbol=symbol,
+        direction="CALL",
+        expiry="5m",
+        confidence=Decimal("80"),
+        entry_time_utc=entry_time_utc,
+    )
+
+
+def test_replay_uses_timestamp_aligned_closed_history(monkeypatch):
+    monkeypatch.setattr("quotex_mtf_signal_bot.backtest.replay.build_signal", _stub_signal)
     candles = {
         Timeframe.M1: make_candles(Timeframe.M1, 1000),
         Timeframe.M5: make_candles(Timeframe.M5, 200),
@@ -33,7 +46,8 @@ def test_replay_uses_timestamp_aligned_closed_history():
     assert all(signal.entry_time_utc > candles[Timeframe.M1][899].timestamp_utc for signal in signals[-1:])
 
 
-def test_replay_does_not_use_future_higher_timeframe_candles():
+def test_replay_does_not_use_future_higher_timeframe_candles(monkeypatch):
+    monkeypatch.setattr("quotex_mtf_signal_bot.backtest.replay.build_signal", _stub_signal)
     candles = {
         Timeframe.M1: make_candles(Timeframe.M1, 100),
         Timeframe.M5: make_candles(Timeframe.M5, 100),

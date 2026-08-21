@@ -4,13 +4,27 @@ import re
 from dataclasses import dataclass
 
 
+# Broad ISO-4217-style currency-code set used only to distinguish FX symbols
+# from metals, indices, crypto, and other MT5 instruments. Broker suffixes such
+# as ``m`` and ``-OTC`` are deliberately ignored when identifying a pair.
 CURRENCY_CODES = frozenset(
     {
-        "AED", "ARS", "AUD", "BDT", "BGN", "BRL", "CAD", "CHF", "CLP",
-        "CNH", "CNY", "COP", "CZK", "DKK", "DZD", "EGP", "EUR", "GBP",
-        "HKD", "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KES", "KRW",
-        "MXN", "MYR", "NGN", "NOK", "NZD", "PHP", "PKR", "PLN", "QAR",
-        "RON", "SAR", "SEK", "SGD", "THB", "TRY", "TWD", "USD", "ZAR",
+        "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
+        "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL",
+        "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNH",
+        "CNY", "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD",
+        "EGP", "ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP",
+        "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HTG", "HUF", "IDR", "ILS",
+        "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR",
+        "KMF", "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD",
+        "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
+        "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK",
+        "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG",
+        "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK",
+        "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL",
+        "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
+        "UGX", "USD", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD",
+        "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL",
     }
 )
 

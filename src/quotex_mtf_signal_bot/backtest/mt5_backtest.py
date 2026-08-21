@@ -15,6 +15,7 @@ def run_mt5_backtest(
     *,
     bars: int = 1000,
     output_path: str | Path = "data/backtest.json",
+    evaluation_timeframe: Timeframe = Timeframe.M1,
     mt5_module: Any | None = None,
 ) -> Path:
     """Run a closed-candle M1/M5/M15 backtest directly from the local MT5 terminal."""
@@ -38,7 +39,7 @@ def run_mt5_backtest(
             candles[timeframe] = values[:-1] if len(values) > 1 else []
 
         signals = generate_signals(candles, symbol=symbol)
-        report = run_backtest(signals, candles[Timeframe.M1])
+        report = run_backtest(signals, candles[evaluation_timeframe])
         return write_dashboard_json(report, output_path)
     finally:
         source.shutdown()

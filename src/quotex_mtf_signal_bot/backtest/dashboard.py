@@ -69,34 +69,42 @@ def _load_dashboard_data(path: Path) -> dict[str, Any]:
 
 
 def run_dashboard() -> None:
-    """Run the local Streamlit backtest dashboard."""
+    """Run the local Streamlit research dashboard."""
     import streamlit as st
 
     st.set_page_config(
-        page_title="Quotex MTF Signal Bot — Backtest",
+        page_title="Quotex MTF Signal Bot — Research",
         page_icon="📊",
         layout="wide",
     )
 
-    st.title("📊 Backtest Performance")
-    st.caption("Local research dashboard. It does not execute real-money trades.")
+    st.title("📊 MTF Signal Research")
+    st.caption("Live analysis uses the connected MT5 feed. Backtest is optional research validation; it does not execute trades.")
 
     data_path = _project_root() / "data" / "backtest.json"
+    default_pairs = [
+        "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+        "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+        "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD", "CADJPY", "CADCHF",
+        "CHFJPY", "NZDJPY", "NZDCHF", "NZDCAD",
+    ]
 
-    controls = st.columns([1, 1, 1])
+    controls = st.columns([1, 1, 1, 1])
     with controls[0]:
-        symbol = st.selectbox("Pair", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"], index=0)
+        symbol = st.selectbox("Pair", default_pairs, index=2)
     with controls[1]:
         timeframe_label = st.selectbox("Timeframe", ["M1", "M5", "M15"], index=0)
         evaluation_timeframe = Timeframe(timeframe_label)
     with controls[2]:
-        run_backtest_clicked = st.button("Run MT5 backtest", use_container_width=True)
+        run_backtest_clicked = st.button("Optional MT5 backtest", use_container_width=True)
+    with controls[3]:
+        st.metric("Signal mode", "Closed M1 + M5 + M15")
 
     if run_backtest_clicked:
-        with st.spinner(f"Running {symbol} {timeframe_label} backtest from MT5..."):
+        with st.spinner(f"Running research backtest for {symbol} {timeframe_label}..."):
             try:
                 from quotex_mtf_signal_bot.backtest.mt5_backtest import run_mt5_backtest
-
                 output = run_mt5_backtest(
                     symbol,
                     evaluation_timeframe=evaluation_timeframe,
@@ -106,7 +114,7 @@ def run_dashboard() -> None:
                 st.rerun()
             except Exception as exc:
                 st.error(f"Backtest could not run: {exc}")
-                st.info("Make sure the MetaTrader 5 desktop terminal is installed, open, and logged into the intended account/feed.")
+                st.info("The live signal engine does not depend on this button. Ensure the MT5 terminal/feed is available if you want historical validation.")
 
     data = _load_dashboard_data(data_path)
     metrics = data.get("metrics") or {}
@@ -129,12 +137,12 @@ def run_dashboard() -> None:
     row2[2].metric("Max win streak", metric_value("winStreak"))
     row2[3].metric("Max loss streak", metric_value("lossStreak"))
 
-    st.subheader("Recent results")
+    st.subheader("Recent research results")
     if trades:
         recent = list(reversed(trades[-50:]))
         st.dataframe(recent, use_container_width=True, hide_index=True)
     else:
-        st.info(f"No backtest data loaded yet. Click 'Run MT5 backtest' to generate it. Expected file: {data_path}")
+        st.info("No historical research data loaded. Live signal analysis does not require running a backtest first.")
 
 
 if __name__ == "__main__":

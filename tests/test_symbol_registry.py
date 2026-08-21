@@ -9,7 +9,7 @@ class FakeAdapter:
         return self._symbols
 
 
-def test_registry_discovers_all_currency_pairs_and_broker_suffixes():
+def test_registry_discovers_real_currency_pairs_and_broker_suffixes():
     adapter = FakeAdapter(
         [
             "EURUSD",
@@ -26,7 +26,6 @@ def test_registry_discovers_all_currency_pairs_and_broker_suffixes():
     registry = SymbolRegistry.from_mt5(adapter)
 
     assert registry.symbols == (
-        "AUDNZD-OTC",
         "EURUSD",
         "EURUSDm",
         "GBPUSDm",
@@ -35,9 +34,17 @@ def test_registry_discovers_all_currency_pairs_and_broker_suffixes():
     )
 
 
+def test_registry_can_explicitly_include_otc_for_research():
+    adapter = FakeAdapter(["EURUSDm", "USDJPY", "AUDNZD-OTC", "XAUUSD"])
+
+    registry = SymbolRegistry.from_mt5(adapter, include_otc=True)
+
+    assert registry.symbols == ("AUDNZD-OTC", "EURUSDm", "USDJPY")
+
+
 def test_registry_can_still_use_explicit_canonical_candidates():
     adapter = FakeAdapter(["EURUSDm", "USDJPY", "AUDNZD-OTC", "XAUUSD"])
 
     registry = SymbolRegistry.from_mt5(adapter, candidates=("EURUSD", "AUDNZD", "GBPUSD"))
 
-    assert registry.symbols == ("AUDNZD-OTC", "EURUSDm")
+    assert registry.symbols == ("EURUSDm",)

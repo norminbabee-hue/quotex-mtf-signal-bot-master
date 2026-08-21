@@ -4,51 +4,15 @@ import re
 from dataclasses import dataclass
 
 
-# Currency pairs visible in the Quotex watch-list used by this bot. The
-# canonical names are deliberately separated from broker symbols so names
-# such as GBPUSDm and AUDNZD-OTC can be matched without losing their suffix.
+# Real-market FX pairs supported by the Quotex watch-list used by this bot.
+# OTC instruments are intentionally excluded from the normal live scanner.
 QUOTEX_WATCHLIST = (
-    "AUDNZD",
-    "USDIDR",
-    "USDINR",
-    "USDBRL",
-    "CADCHF",
-    "USDMXN",
-    "USDZAR",
-    "NZDJPY",
-    "USDPHP",
-    "USDEGP",
-    "CADJPY",
-    "USDPKR",
-    "USDCOP",
-    "USDBDT",
-    "EURUSD",
-    "AUDJPY",
-    "USDJPY",
-    "AUDUSD",
-    "AUDCAD",
-    "GBPNZD",
-    "NZDCAD",
-    "NZDCHF",
-    "USDARS",
-    "USDDZD",
-    "USDNGN",
-    "EURCAD",
-    "AUDCHF",
-    "GBPAUD",
-    "GBPCAD",
-    "GBPUSD",
-    "EURAUD",
-    "CHFJPY",
-    "GBPCHF",
-    "GBPJPY",
-    "USDCHF",
-    "NZDUSD",
-    "EURCHF",
-    "USDCAD",
-    "EURNZD",
-    "EURGBP",
-    "EURJPY",
+    "AUDNZD", "USDIDR", "USDINR", "USDBRL", "CADCHF", "USDMXN", "USDZAR",
+    "NZDJPY", "USDPHP", "USDEGP", "CADJPY", "USDPKR", "USDCOP", "USDBDT",
+    "EURUSD", "AUDJPY", "USDJPY", "AUDUSD", "AUDCAD", "GBPNZD", "NZDCAD",
+    "NZDCHF", "USDARS", "USDDZD", "USDNGN", "EURCAD", "AUDCHF", "GBPAUD",
+    "GBPCAD", "GBPUSD", "EURAUD", "CHFJPY", "GBPCHF", "GBPJPY", "USDCHF",
+    "NZDUSD", "EURCHF", "USDCAD", "EURNZD", "EURGBP", "EURJPY",
 )
 
 CURRENCY_CODES = frozenset(
@@ -80,21 +44,25 @@ class SymbolRegistry:
             return pair
         return None
 
+    @staticmethod
+    def _is_otc(symbol: str) -> bool:
+        """Recognize Quotex-style OTC broker symbols without blocking normal suffixes."""
+        return "OTC" in symbol.upper()
+
     @classmethod
     def from_mt5(
         cls,
         adapter,
         candidates: tuple[str, ...] | None = None,
+        *,
+        include_otc: bool = False,
     ) -> "SymbolRegistry":
-        """Discover broker symbols that belong to the Quotex FX universe.
+        """Discover real-market broker symbols belonging to the Quotex FX universe.
 
-        The connected MT5 feed can contain instruments that Quotex does not
-        expose (for example USDTRY, EURTRY, XAUUSD or indices). Those are
-        intentionally excluded by default. The Quotex watch-list is the
-        source of truth, while broker suffixes/OTC markers are preserved.
-
-        ``candidates`` is an optional canonical-pair restriction for callers
-        that need a smaller subset; it is not required for normal scanning.
+        Broker suffixes such as ``m`` are preserved. OTC instruments are excluded
+        by default because the live scanner is intended only for real-market
+        trading sessions. ``include_otc=True`` remains available for explicit
+        research/testing.
         """
         available = tuple(dict.fromkeys(str(name) for name in adapter.symbols()))
         allowed = tuple(str(item).upper() for item in (candidates or QUOTEX_WATCHLIST))
@@ -102,6 +70,8 @@ class SymbolRegistry:
 
         resolved: list[str] = []
         for name in available:
+            if not include_otc and cls._is_otc(name):
+                continue
             canonical = cls._currency_pair(name)
             if canonical in allowed_set:
                 resolved.append(name)

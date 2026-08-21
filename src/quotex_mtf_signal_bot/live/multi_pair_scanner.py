@@ -5,7 +5,7 @@ from typing import Callable
 
 from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
 from quotex_mtf_signal_bot.data.mt5_adapter import MarketDataAdapter, Tick
-from quotex_mtf_signal_bot.data.symbol_monitor import MajorFXMonitor
+from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 from quotex_mtf_signal_bot.signals.model import Signal
 from quotex_mtf_signal_bot.live.mtf_signal_service import LiveMTFSignalService
 
@@ -16,7 +16,12 @@ class ScannerSnapshot:
 
 
 class MultiPairScanner:
-    """Run the same closed-candle M1/M5/M15 pipeline for every FX pair."""
+    """Run the closed-candle M1/M5/M15 pipeline for every broker FX symbol.
+
+    The universe is discovered at runtime from MT5, so the scanner is not
+    limited to a hard-coded major-pair list. Broker suffixes and OTC-style
+    names are preserved exactly as supplied by the broker.
+    """
 
     def __init__(
         self,
@@ -25,19 +30,20 @@ class MultiPairScanner:
     ) -> None:
         self.adapter = adapter
         self.on_signal = on_signal
-        self.monitor = MajorFXMonitor(adapter)
+        self.registry = SymbolRegistry.from_mt5(adapter)
         self.managers: dict[str, LiveCandleManager] = {}
         self.services: dict[str, LiveMTFSignalService] = {}
         self.refresh()
 
     def refresh(self) -> ScannerSnapshot:
-        symbols = tuple(self.monitor.refresh().symbols)
+        self.registry = SymbolRegistry.from_mt5(self.adapter)
+        symbols = self.registry.symbols
         self.managers = {symbol: LiveCandleManager(self.adapter, symbol) for symbol in symbols}
         self.services = {symbol: LiveMTFSignalService(symbol) for symbol in symbols}
         return ScannerSnapshot(symbols)
 
     def warm_up(self, history_count: int = 200) -> None:
-        """Seed every pair from MT5 before the first live tick is processed."""
+        """Seed every discovered pair from MT5 before the first live tick."""
         for symbol, manager in self.managers.items():
             history = manager.seed_history(history_count)
             self.services[symbol].seed_history(history)

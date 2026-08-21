@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from bisect import bisect_left
 
 from quotex_mtf_signal_bot.analysis.mtf import analyze_mtf
 from quotex_mtf_signal_bot.core.models import Candle, Timeframe
@@ -20,31 +20,40 @@ def generate_signals(
     symbol: str,
     min_history: dict[Timeframe, int] | None = None,
 ) -> list[Signal]:
-    """Replay pre-aligned closed-candle streams without look-ahead.
+    """Replay closed-candle streams using timestamp alignment, with no look-ahead.
 
-    Replay fixtures represent each timeframe as an indexed history stream. At
-    M1 index ``i``, only bars with indexes below ``i`` are eligible on every
-    timeframe. This keeps the replay deterministic while ensuring the current
-    entry bar itself is never included in the analysis.
+    A common MTF replay bug is to use the M1 array index to slice M5/M15
+    arrays. That leaks future higher-timeframe candles into earlier M1 entries
+    because one M15 candle spans fifteen M1 candles. We therefore align every
+    timeframe by the entry timestamp and only use candles whose timestamps are
+    strictly earlier than the entry candle.
     """
     history = {**DEFAULT_WINDOWS, **(min_history or {})}
-    entry_candles = sorted(
-        candles_by_timeframe.get(Timeframe.M1, []), key=lambda c: c.timestamp_utc
-    )
+    streams = {
+        timeframe: sorted(
+            candles_by_timeframe.get(timeframe, []), key=lambda candle: candle.timestamp_utc
+        )
+        for timeframe in (Timeframe.M1, Timeframe.M5, Timeframe.M15)
+    }
+    timestamps = {
+        timeframe: [candle.timestamp_utc for candle in stream]
+        for timeframe, stream in streams.items()
+    }
+
+    entry_candles = streams[Timeframe.M1]
     signals: list[Signal] = []
 
-    for entry_index, entry in enumerate(entry_candles):
+    for entry in entry_candles:
         snapshot: dict[Timeframe, list[Candle]] = {}
         ready = True
-        for timeframe in (Timeframe.M1, Timeframe.M5, Timeframe.M15):
-            stream = sorted(
-                candles_by_timeframe.get(timeframe, []), key=lambda c: c.timestamp_utc
-            )
-            closed = stream[:entry_index]
+        for timeframe, stream in streams.items():
+            # bisect_left excludes a candle at exactly the entry timestamp.
+            closed_end = bisect_left(timestamps[timeframe], entry.timestamp_utc)
+            closed = stream[:closed_end]
             if len(closed) < history[timeframe]:
                 ready = False
                 break
-            snapshot[timeframe] = closed[-history[timeframe]:]
+            snapshot[timeframe] = closed[-history[timeframe] :]
 
         if not ready:
             continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -52,7 +53,6 @@ class MT5DataSource:
                 if str(item.name).upper().startswith(wanted)
             ]
             if candidates:
-                # Prefer the shortest suffix, e.g. USDJPYm over a longer variant.
                 resolved = min(candidates, key=lambda name: (len(name), name))
                 self._mt5.symbol_select(resolved, True)
                 return resolved
@@ -63,7 +63,6 @@ class MT5DataSource:
         )
 
     def tick(self, symbol: str) -> Tick:
-        """Read the latest broker tick with millisecond precision when MT5 exposes it."""
         resolved_symbol = self._resolve_symbol(symbol)
         raw = self._mt5.symbol_info_tick(resolved_symbol)
         if raw is None:
@@ -77,8 +76,8 @@ class MT5DataSource:
         return Tick(
             symbol=symbol,
             timestamp_utc=timestamp,
-            bid=float(raw.bid),
-            ask=float(raw.ask),
+            bid=Decimal(str(raw.bid)),
+            ask=Decimal(str(raw.ask)),
         )
 
     def server_tick_time(self, symbol: str) -> datetime:
@@ -105,10 +104,10 @@ class MT5DataSource:
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp_utc=datetime.fromtimestamp(int(row.time), tz=timezone.utc),
-                open=float(row.open),
-                high=float(row.high),
-                low=float(row.low),
-                close=float(row.close),
+                open=Decimal(str(row.open)),
+                high=Decimal(str(row.high)),
+                low=Decimal(str(row.low)),
+                close=Decimal(str(row.close)),
                 tick_volume=int(row.tick_volume),
             )
             for row in frame.itertuples(index=False)

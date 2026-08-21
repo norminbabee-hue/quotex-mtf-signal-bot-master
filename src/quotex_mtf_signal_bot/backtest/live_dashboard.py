@@ -51,13 +51,16 @@ def scan_live_pairs(adapter: MT5Adapter, history_count: int = 120) -> list[dict[
             score = score_mtf(analysis)
             latest = candles[Timeframe.M1][-1]
 
-            if score.direction == "NO_SIGNAL":
-                next_candle = "NO SIGNAL"
-                expiry_value = "—"
+            if score.next_candle_direction == "CALL":
+                next_candle = "UP ↑"
+            elif score.next_candle_direction == "PUT":
+                next_candle = "DOWN ↓"
             else:
-                next_candle = "UP ↑" if score.next_candle_direction == "CALL" else "DOWN ↓"
-                # The requested prediction target is exactly the next M1 candle.
-                expiry_value = "1m"
+                next_candle = "NO SIGNAL"
+
+            # The horizon is about the prediction target, not whether the
+            # stricter actionability gate accepted the setup.
+            expiry_value = "1m" if score.next_candle_direction else "—"
 
             rows.append(
                 {
@@ -65,7 +68,7 @@ def scan_live_pairs(adapter: MT5Adapter, history_count: int = 120) -> list[dict[
                     "signal": score.direction,
                     "next_candle": next_candle,
                     "score": score.score,
-                    "confidence": f"{score.confidence:.0f}%",
+                    "confidence": f"{score.confidence:.0f}%" if score.confidence else "—",
                     "expiry": expiry_value,
                     "closed_at": latest.timestamp_utc.astimezone(timezone.utc).isoformat(),
                     "reason": " | ".join(score.reasons),
@@ -85,8 +88,27 @@ def scan_live_pairs(adapter: MT5Adapter, history_count: int = 120) -> list[dict[
                 }
             )
 
-    order = {"CALL": 0, "PUT": 1, "NO_SIGNAL": 2, "ERROR": 3}
-    rows.sort(key=lambda row: (order.get(row["signal"], 9), -int(row["score"]), row["pair"]))
+    # Sort actionable predictions first, then visible next-candle predictions,
+    # then pairs with no directional edge. This makes the scanner useful even
+    # when the actionability filter rejects most setups.
+    def sort_key(row: dict[str, Any]) -> tuple[int, int, str]:
+        signal = row["signal"]
+        next_candle = row["next_candle"]
+        if signal == "CALL":
+            bucket = 0
+        elif signal == "PUT":
+            bucket = 1
+        elif next_candle == "UP ↑":
+            bucket = 2
+        elif next_candle == "DOWN ↓":
+            bucket = 3
+        elif signal == "ERROR":
+            bucket = 5
+        else:
+            bucket = 4
+        return bucket, -int(row["score"]), row["pair"]
+
+    rows.sort(key=sort_key)
     return rows
 
 
@@ -123,28 +145,34 @@ def run_live_dashboard() -> None:
         st.info("No FX symbols were discovered from the connected MT5 terminal yet.")
         return
 
-    calls = sum(row["signal"] == "CALL" for row in rows)
-    puts = sum(row["signal"] == "PUT" for row in rows)
-    neutral = sum(row["signal"] == "NO_SIGNAL" for row in rows)
+    calls = sum(row["next_candle"] == "UP ↑" for row in rows)
+    puts = sum(row["next_candle"] == "DOWN ↓" for row in rows)
+    actionable_calls = sum(row["signal"] == "CALL" for row in rows)
+    actionable_puts = sum(row["signal"] == "PUT" for row in rows)
+    neutral = sum(row["next_candle"] == "NO SIGNAL" for row in rows)
     errors = sum(row["signal"] == "ERROR" for row in rows)
 
-    metrics = st.columns(5)
+    metrics = st.columns(6)
     metrics[0].metric("Pairs scanned", len(rows))
-    metrics[1].metric("UP", calls)
-    metrics[2].metric("DOWN", puts)
-    metrics[3].metric("NO SIGNAL", neutral)
-    metrics[4].metric("Errors", errors)
+    metrics[1].metric("NEXT UP", calls)
+    metrics[2].metric("NEXT DOWN", puts)
+    metrics[3].metric("Actionable UP", actionable_calls)
+    metrics[4].metric("Actionable DOWN", actionable_puts)
+    metrics[5].metric("Errors", errors)
 
     st.divider()
     st.subheader("Next candle prediction")
-    st.caption("Prediction target: the next closed M1 candle. UP ↑ = CALL, DOWN ↓ = PUT.")
+    st.caption(
+        "Prediction target: the next closed M1 candle. UP ↑ = CALL, DOWN ↓ = PUT. "
+        "A row can show UP/DOWN prediction while remaining NO_SIGNAL when the stricter actionability gates reject it."
+    )
     st.dataframe(
         rows,
         use_container_width=True,
         hide_index=True,
         column_config={
             "pair": "Pair",
-            "signal": "Internal direction",
+            "signal": "Action status",
             "next_candle": "NEXT M1",
             "score": st.column_config.NumberColumn("Score", format="%d"),
             "confidence": "Confidence",
@@ -155,7 +183,7 @@ def run_live_dashboard() -> None:
     )
     st.caption(
         "Confidence is a model-strength score, not a guaranteed probability of winning. "
-        "NO SIGNAL is intentional when the next-candle model and M1/M5/M15 confirmation disagree."
+        "NEXT M1 shows the model's directional prediction separately from the stricter trade/action filter."
     )
 
 

@@ -27,11 +27,47 @@ class MT5DataSource:
     def shutdown(self) -> None:
         self._mt5.shutdown()
 
+    def _resolve_symbol(self, symbol: str) -> str:
+        """Resolve a dashboard symbol to the broker's actual MT5 symbol.
+
+        Brokers such as Exness commonly expose symbols with suffixes, e.g.
+        EURUSD -> EURUSDm and USDJPY -> USDJPYm. The dashboard keeps the
+        broker-neutral names while this adapter resolves the real terminal name.
+        """
+        requested = symbol.strip()
+        if not requested:
+            raise ValueError("MT5 symbol cannot be empty")
+
+        info = self._mt5.symbol_info(requested)
+        if info is not None:
+            self._mt5.symbol_select(requested, True)
+            return requested
+
+        symbols = self._mt5.symbols_get()
+        if symbols:
+            wanted = requested.upper()
+            candidates = [
+                item.name
+                for item in symbols
+                if str(item.name).upper().startswith(wanted)
+            ]
+            if candidates:
+                # Prefer the shortest suffix, e.g. USDJPYm over a longer variant.
+                resolved = min(candidates, key=lambda name: (len(name), name))
+                self._mt5.symbol_select(resolved, True)
+                return resolved
+
+        raise RuntimeError(
+            f"MT5 symbol not found: {requested}. "
+            "Open the broker's Market Watch and make sure the symbol is available."
+        )
+
     def tick(self, symbol: str) -> Tick:
         """Read the latest broker tick with millisecond precision when MT5 exposes it."""
-        raw = self._mt5.symbol_info_tick(symbol)
+        resolved_symbol = self._resolve_symbol(symbol)
+        raw = self._mt5.symbol_info_tick(resolved_symbol)
         if raw is None:
-            raise RuntimeError(f"No tick available for {symbol}")
+            raise RuntimeError(f"No tick available for {symbol} (MT5 symbol: {resolved_symbol})")
 
         if hasattr(raw, "time_msc"):
             timestamp = datetime.fromtimestamp(int(raw.time_msc) / 1000, tz=timezone.utc)
@@ -49,10 +85,14 @@ class MT5DataSource:
         return self.tick(symbol).timestamp_utc
 
     def candles(self, symbol: str, timeframe: Timeframe, count: int = 500) -> list[Candle]:
+        resolved_symbol = self._resolve_symbol(symbol)
         mt5_tf = getattr(self._mt5, _MT5_TIMEFRAME_NAMES[timeframe])
-        rows = self._mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
-        if rows is None:
-            raise RuntimeError(f"MT5 returned no rates for {symbol} {timeframe}")
+        rows = self._mt5.copy_rates_from_pos(resolved_symbol, mt5_tf, 0, count)
+        if rows is None or len(rows) == 0:
+            raise RuntimeError(
+                f"MT5 returned no rates for {symbol} {timeframe} "
+                f"(MT5 symbol: {resolved_symbol})"
+            )
 
         frame = pd.DataFrame(rows)
         required = {"time", "open", "high", "low", "close", "tick_volume"}

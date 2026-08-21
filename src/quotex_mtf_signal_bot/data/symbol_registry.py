@@ -23,8 +23,8 @@ CURRENCY_CODES = frozenset(
         "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK",
         "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL",
         "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
-        "UGX", "USD", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD",
-        "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL",
+        "UGX", "USD", "UYU", "UZS", "VES", "VND", "VUV", "WST", "YER", "ZAR",
+        "ZMW", "ZWL", "XAF", "XCD", "XOF", "XPF",
     }
 )
 
@@ -108,7 +108,15 @@ class SymbolRegistry:
             if current is None or rank(name, canonical) < rank(current, canonical):
                 selected[canonical] = name
 
-        pairs = tuple(sorted(selected.items()))
+        # Stable project display/scanner order: for a given base currency,
+        # USD-quoted pairs are shown before non-USD crosses (EURUSD before
+        # EURTRY, for example). This has nothing to do with OTC classification.
+        def pair_sort(item: tuple[str, str]) -> tuple[str, int, str]:
+            canonical = item[0]
+            base, quote = canonical[:3], canonical[3:]
+            return base, 0 if quote == "USD" else 1, quote
+
+        pairs = tuple(sorted(selected.items(), key=pair_sort))
         return cls(
             symbols=tuple(canonical for canonical, _ in pairs),
             _broker_pairs=pairs,

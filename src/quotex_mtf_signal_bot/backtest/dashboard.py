@@ -20,6 +20,11 @@ class DashboardMetrics:
     loss_rate: Decimal
     max_win_streak: int
     max_loss_streak: int
+    next_candle_accuracy: Decimal
+    up_predictions: int
+    down_predictions: int
+    up_wins: int
+    down_wins: int
 
 
 def build_metrics(report: BacktestReport) -> DashboardMetrics:
@@ -40,6 +45,12 @@ def build_metrics(report: BacktestReport) -> DashboardMetrics:
     decisive = report.wins + report.losses
     win_rate = Decimal(report.wins * 100) / Decimal(decisive) if decisive else Decimal(0)
     loss_rate = Decimal(report.losses * 100) / Decimal(decisive) if decisive else Decimal(0)
+
+    up_predictions = sum(t.signal.direction == "CALL" for t in report.trades)
+    down_predictions = sum(t.signal.direction == "PUT" for t in report.trades)
+    up_wins = sum(t.signal.direction == "CALL" and t.outcome == "WIN" for t in report.trades)
+    down_wins = sum(t.signal.direction == "PUT" and t.outcome == "WIN" for t in report.trades)
+
     return DashboardMetrics(
         total_signals=report.total,
         wins=report.wins,
@@ -49,6 +60,11 @@ def build_metrics(report: BacktestReport) -> DashboardMetrics:
         loss_rate=loss_rate,
         max_win_streak=max_win,
         max_loss_streak=max_loss,
+        next_candle_accuracy=win_rate,
+        up_predictions=up_predictions,
+        down_predictions=down_predictions,
+        up_wins=up_wins,
+        down_wins=down_wins,
     )
 
 
@@ -79,7 +95,9 @@ def run_dashboard() -> None:
     )
 
     st.title("📊 MTF Signal Research")
-    st.caption("Live analysis uses the connected MT5 feed. Backtest is optional research validation; it does not execute trades.")
+    st.caption(
+        "Live analysis uses the connected MT5 feed. Backtest is optional research validation; it does not execute trades."
+    )
 
     data_path = _project_root() / "data" / "backtest.json"
     default_pairs = [
@@ -99,7 +117,7 @@ def run_dashboard() -> None:
     with controls[2]:
         run_backtest_clicked = st.button("Optional MT5 backtest", use_container_width=True)
     with controls[3]:
-        st.metric("Signal mode", "Closed M1 + M5 + M15")
+        st.metric("Signal mode", "Next closed M1 candle")
 
     if run_backtest_clicked:
         with st.spinner(f"Running research backtest for {symbol} {timeframe_label}..."):
@@ -126,23 +144,34 @@ def run_dashboard() -> None:
         return metrics.get(name, default)
 
     row1 = st.columns(4)
-    row1[0].metric("Total signals", metric_value("total"))
-    row1[1].metric("Wins", metric_value("wins"))
-    row1[2].metric("Losses", metric_value("losses"))
+    row1[0].metric("Next-candle predictions", metric_value("total"))
+    row1[1].metric("Correct", metric_value("wins"))
+    row1[2].metric("Wrong", metric_value("losses"))
     row1[3].metric("Ties", metric_value("ties"))
 
     row2 = st.columns(4)
-    row2[0].metric("Win rate", f"{float(metric_value('winRate', 0)):.2f}%")
-    row2[1].metric("Loss rate", f"{float(metric_value('lossRate', 0)):.2f}%")
-    row2[2].metric("Max win streak", metric_value("winStreak"))
+    row2[0].metric("Next M1 accuracy", f"{float(metric_value('nextCandleAccuracy', metric_value('winRate', 0))):.2f}%")
+    row2[1].metric("UP predictions", metric_value("upPredictions"))
+    row2[2].metric("DOWN predictions", metric_value("downPredictions"))
     row2[3].metric("Max loss streak", metric_value("lossStreak"))
 
-    st.subheader("Recent research results")
+    row3 = st.columns(4)
+    row3[0].metric("UP correct", metric_value("upWins"))
+    row3[1].metric("DOWN correct", metric_value("downWins"))
+    row3[2].metric("Max win streak", metric_value("winStreak"))
+    row3[3].metric("Decisive signals", metric_value("total", 0) - metric_value("ties", 0))
+
+    st.subheader("Recent next-candle research")
     if trades:
         recent = list(reversed(trades[-50:]))
         st.dataframe(recent, use_container_width=True, hide_index=True)
     else:
         st.info("No historical research data loaded. Live signal analysis does not require running a backtest first.")
+
+    st.caption(
+        "Next M1 accuracy measures whether the predicted CALL/UP or PUT/DOWN direction matched the next closed M1 candle. "
+        "It is a historical research metric, not a guarantee of future outcomes."
+    )
 
 
 if __name__ == "__main__":

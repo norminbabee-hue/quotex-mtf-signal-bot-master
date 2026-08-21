@@ -47,10 +47,11 @@ def _reject_near_opposing_level(entry, direction: str) -> bool:
 def score_mtf(analysis: MTFAnalysis) -> SignalScore:
     """Score a live M1 entry using closed M1/M5/M15 confirmation.
 
-    The scorer is intentionally selective. It does not lower its threshold just
-    to increase the number of alerts, and it never treats confidence as a
-    guaranteed win probability. This is especially important when scanning many
-    pairs, because weak pairs should be filtered rather than forced into a trade.
+    M15 and M5 are the directional context. M1 is the entry trigger, so a
+    neutral M1 trend is allowed when price action produces a fresh trigger in
+    the same direction as the higher-timeframe context. An explicitly
+    opposite M1 trend is still rejected. This avoids missing valid pullback
+    entries while keeping weak/conflicting setups out of the live signal feed.
     """
     required = (Timeframe.M1, Timeframe.M5, Timeframe.M15)
     if any(timeframe not in analysis.analyses for timeframe in required):
@@ -65,17 +66,33 @@ def score_mtf(analysis: MTFAnalysis) -> SignalScore:
 
     direction = "CALL" if analysis.alignment == "bullish" else "PUT"
     expected_trend = analysis.alignment
-    if any(item.trend != expected_trend for item in (context, confirmation, entry)):
-        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15/M5/M1 trend confirmation is incomplete",))
+
+    # Higher timeframes must agree. M1 is an entry timeframe and may be
+    # neutral during a pullback, but it may never be actively opposite.
+    if context.trend != expected_trend or confirmation.trend != expected_trend:
+        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15/M5 trend confirmation is incomplete",))
+    if entry.trend not in {expected_trend, "neutral"}:
+        return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M1 trend conflicts with M15/M5",))
     if context.score < MIN_M15_TREND_SCORE:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M15 context is not strong enough",))
     if confirmation.score < MIN_M5_TREND_SCORE:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M5 confirmation is not strong enough",))
-    if entry.score < MIN_M1_TREND_SCORE:
+    if entry.trend == expected_trend and entry.score < MIN_M1_TREND_SCORE:
         return SignalScore("NO_SIGNAL", 0, Decimal(0), ("M1 trend evidence is too weak",))
 
-    points = context.score + confirmation.score + entry.score
-    reasons: list[str] = [f"MTF alignment: {analysis.alignment}", "M15 context confirms", "M5 confirms", "M1 entry trend confirms"]
+    # A neutral M1 is a pullback/setup state rather than a directional trend.
+    # Give it a small base contribution only after a fresh trigger is proven.
+    effective_entry_score = entry.score if entry.trend == expected_trend else 2
+    points = context.score + confirmation.score + effective_entry_score
+    reasons: list[str] = [
+        f"MTF alignment: {analysis.alignment}",
+        "M15 context confirms",
+        "M5 confirms",
+    ]
+    if entry.trend == expected_trend:
+        reasons.append("M1 entry trend confirms")
+    else:
+        reasons.append("M1 pullback with higher-timeframe trend intact")
 
     indicators = entry.indicators
     action = entry.price_action

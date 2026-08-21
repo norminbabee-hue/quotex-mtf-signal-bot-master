@@ -19,7 +19,7 @@ class FakeAdapter:
         return Tick(symbol, datetime.now(timezone.utc), Decimal("1"), Decimal("1"))
 
 
-def test_multi_pair_scanner_discovers_all_broker_fx_symbols():
+def test_multi_pair_scanner_discovers_canonical_fx_symbols():
     adapter = FakeAdapter([
         "EURUSD",
         "GBPUSDm",
@@ -32,21 +32,24 @@ def test_multi_pair_scanner_discovers_all_broker_fx_symbols():
     scanner = MultiPairScanner(adapter, lambda signal: None)
 
     assert scanner.registry.symbols == (
-        "AUDNZD-OTC",
+        "AUDNZD",
         "EURUSD",
-        "GBPUSDm",
+        "GBPUSD",
         "USDJPY",
     )
+    assert scanner.registry.broker_symbol("AUDNZD") == "AUDNZD-OTC"
+    assert scanner.registry.broker_symbol("GBPUSD") == "GBPUSDm"
     assert set(scanner.managers) == set(scanner.registry.symbols)
     assert set(scanner.services) == set(scanner.registry.symbols)
 
 
-def test_multi_pair_scanner_refreshes_symbol_universe():
+def test_multi_pair_scanner_refreshes_symbol_universe_without_otc_classification():
     adapter = FakeAdapter(["EURUSD", "USDJPY"])
     scanner = MultiPairScanner(adapter, lambda signal: None)
 
     adapter._symbols = ["EURUSD", "AUDNZD-OTC"]
     snapshot = scanner.refresh()
 
-    assert snapshot.symbols == ("AUDNZD-OTC", "EURUSD")
-    assert set(scanner.managers) == {"AUDNZD-OTC", "EURUSD"}
+    assert snapshot.symbols == ("AUDNZD", "EURUSD")
+    assert scanner.registry.broker_symbol("AUDNZD") == "AUDNZD-OTC"
+    assert set(scanner.managers) == {"AUDNZD", "EURUSD"}

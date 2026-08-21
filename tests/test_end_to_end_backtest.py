@@ -24,10 +24,14 @@ def candles(timeframe: Timeframe, count: int) -> list[Candle]:
 
 
 def test_full_replay_to_backtest_pipeline():
+    # Each timeframe needs enough *elapsed time*, not merely the same number
+    # of candles. The replay requires 60 closed candles on M1/M5/M15, so 180
+    # candles on each timeframe leaves the M15 stream with only 12 closed bars
+    # by the time the 180th M1 candle arrives.
     data = {
-        Timeframe.M1: candles(Timeframe.M1, 180),
-        Timeframe.M5: candles(Timeframe.M5, 180),
-        Timeframe.M15: candles(Timeframe.M15, 180),
+        Timeframe.M1: candles(Timeframe.M1, 1800),
+        Timeframe.M5: candles(Timeframe.M5, 360),
+        Timeframe.M15: candles(Timeframe.M15, 120),
     }
     signals = generate_signals(data, symbol="EURUSD")
     report = run_backtest(signals, data[Timeframe.M1])

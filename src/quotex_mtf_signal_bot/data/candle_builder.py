@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from quotex_mtf_signal_bot.data.candle_timing import (
+    DEFAULT_QUOTEX_SERVER_OFFSET_SECONDS,
+    candle_boundary_utc,
+)
 from quotex_mtf_signal_bot.data.mt5_adapter import Tick
 
 
@@ -21,19 +25,26 @@ class LiveCandle:
 
 
 class CandleBuilder:
-    """Build candles from timestamped ticks using UTC epoch boundaries."""
+    """Build live candles from ticks on Quotex server-clock boundaries."""
 
-    def __init__(self, timeframe_seconds: int) -> None:
+    def __init__(
+        self,
+        timeframe_seconds: int,
+        *,
+        server_offset_seconds: int | float = DEFAULT_QUOTEX_SERVER_OFFSET_SECONDS,
+    ) -> None:
         if timeframe_seconds <= 0:
             raise ValueError("timeframe_seconds must be positive")
         self.timeframe_seconds = timeframe_seconds
+        self.server_offset_seconds = server_offset_seconds
         self._current: LiveCandle | None = None
 
     def _boundary(self, timestamp: datetime) -> datetime:
-        ts = timestamp.astimezone(timezone.utc)
-        epoch = int(ts.timestamp())
-        start = epoch - (epoch % self.timeframe_seconds)
-        return datetime.fromtimestamp(start, tz=timezone.utc)
+        return candle_boundary_utc(
+            timestamp,
+            self.timeframe_seconds,
+            server_offset_seconds=self.server_offset_seconds,
+        )
 
     def update(self, tick: Tick) -> LiveCandle | None:
         if tick.timestamp_utc.tzinfo is None:

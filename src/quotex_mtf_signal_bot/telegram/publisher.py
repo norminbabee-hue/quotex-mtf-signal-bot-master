@@ -16,7 +16,7 @@ class TelegramConfig:
 
 
 class TelegramPublisher:
-    """Minimal Telegram Bot API publisher for approved signals."""
+    """Minimal Telegram Bot API publisher for approved next-candle signals."""
 
     def __init__(self, config: TelegramConfig) -> None:
         if not config.bot_token or not config.chat_id:
@@ -26,13 +26,16 @@ class TelegramPublisher:
     @staticmethod
     def format_signal(signal: Signal) -> str:
         confidence = Decimal(str(signal.confidence)).quantize(Decimal("0.01"))
+        direction = signal.next_candle_direction or signal.direction
+        direction_label = "UP ↑" if direction == "CALL" else "DOWN ↓" if direction == "PUT" else direction
         return "\n".join([
-            "🔔 BINARY SIGNAL",
+            "🔔 NEXT CANDLE SIGNAL",
             f"PAIR: {signal.symbol}",
-            f"DIRECTION: {signal.direction}",
+            f"NEXT M1: {direction_label}",
+            "TARGET: NEXT CLOSED M1 CANDLE",
             f"EXPIRY: {signal.expiry}",
             f"CONFIDENCE: {confidence}%",
-            f"ENTRY: {signal.entry_time_utc.isoformat()}",
+            f"ENTRY UTC: {signal.entry_time_utc.isoformat()}",
         ])
 
     def publish(self, signal: Signal) -> None:
@@ -41,7 +44,12 @@ class TelegramPublisher:
             "text": self.format_signal(signal),
         }).encode("utf-8")
         url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
-        req = request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        req = request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 if response.status < 200 or response.status >= 300:

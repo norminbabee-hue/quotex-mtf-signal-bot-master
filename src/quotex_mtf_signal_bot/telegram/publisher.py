@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from urllib import error, request
 
@@ -28,11 +29,15 @@ class TelegramPublisher:
         confidence = Decimal(str(signal.confidence)).quantize(Decimal("0.01"))
         direction = signal.next_candle_direction or signal.direction
         direction_label = "UP ↑" if direction == "CALL" else "DOWN ↓" if direction == "PUT" else direction
+        target_open = signal.entry_time_utc
+        target_close = target_open + timedelta(minutes=1)
         return "\n".join([
             "🔔 NEXT CANDLE SIGNAL",
             f"PAIR: {signal.symbol}",
             f"NEXT M1: {direction_label}",
             "TARGET: NEXT CLOSED M1 CANDLE",
+            f"TARGET OPEN UTC: {target_open.isoformat()}",
+            f"TARGET CLOSE UTC: {target_close.isoformat()}",
             f"EXPIRY: {signal.expiry}",
             f"CONFIDENCE: {confidence}%",
             f"ENTRY UTC: {signal.entry_time_utc.isoformat()}",

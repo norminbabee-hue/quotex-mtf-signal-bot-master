@@ -60,3 +60,8 @@ class MultiPairBot:
         self.audit.signal(signal, approved=result.allowed, reason=result.reason)
         if result.allowed:
             self.publisher.publish(signal)
+        elif signal.next_candle_direction in {"CALL", "PUT"} and hasattr(self.publisher, "publish_prediction"):
+            # Keep the requested next-candle UP/DOWN forecast visible even when
+            # the stricter action guard rejects the setup. This is a research
+            # prediction, not an approved trade signal.
+            self.publisher.publish_prediction(signal, rejection_reason=result.reason)

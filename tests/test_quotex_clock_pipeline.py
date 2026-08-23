@@ -16,20 +16,22 @@ def tick(hour: int, minute: int, second: int, price: str) -> Tick:
 
 def test_m1_boundary_uses_quotex_server_clock():
     # UTC 16:59:59 is 22:59:59 on the configured +06:00 target clock.
+    # The tick at 17:00 closes the preceding 16:59 -> 17:00 candle.
     builder = CandleBuilder(60, server_offset_seconds=6 * 60 * 60)
     assert builder.update(tick(16, 59, 59, "1.1000")) is None
     closed = builder.update(tick(17, 0, 0, "1.1002"))
 
     assert closed is not None
-    assert closed.open_time_utc == datetime(2026, 8, 21, 17, 0, tzinfo=timezone.utc)
-    assert closed.close_time_utc == datetime(2026, 8, 21, 17, 1, tzinfo=timezone.utc)
+    assert closed.open_time_utc == datetime(2026, 8, 21, 16, 59, tzinfo=timezone.utc)
+    assert closed.close_time_utc == datetime(2026, 8, 21, 17, 0, tzinfo=timezone.utc)
 
 
 def test_m5_boundary_uses_quotex_server_clock():
+    # The tick at 16:55 closes the preceding 16:50 -> 16:55 M5 candle.
     builder = CandleBuilder(300, server_offset_seconds=6 * 60 * 60)
     builder.update(tick(16, 54, 59, "1.1000"))
     closed = builder.update(tick(16, 55, 0, "1.1003"))
 
     assert closed is not None
-    assert closed.open_time_utc == datetime(2026, 8, 21, 16, 55, tzinfo=timezone.utc)
-    assert closed.close_time_utc == datetime(2026, 8, 21, 17, 0, tzinfo=timezone.utc)
+    assert closed.open_time_utc == datetime(2026, 8, 21, 16, 50, tzinfo=timezone.utc)
+    assert closed.close_time_utc == datetime(2026, 8, 21, 16, 55, tzinfo=timezone.utc)

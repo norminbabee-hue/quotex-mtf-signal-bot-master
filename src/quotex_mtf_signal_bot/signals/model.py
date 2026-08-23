@@ -24,19 +24,24 @@ class Signal:
 
 def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -> Signal | None:
     score: SignalScore = score_mtf(analysis)
-    if score.direction == "NO_SIGNAL":
-        return None
 
-    # The live Quotex-style research signal is specifically a next-M1-candle
-    # prediction. Keep the legacy direction field compatible, but make the
-    # horizon explicit instead of silently using a 5m/15m research expiry.
+    # A next-candle prediction is useful even when the stricter actionable
+    # signal gates reject the setup. The live UI/Telegram layer can therefore
+    # distinguish "prediction" from "actionable signal" without losing the
+    # requested UP/DOWN forecast.
+    direction = score.direction
+    if direction == "NO_SIGNAL":
+        direction = score.next_candle_direction or "NO_SIGNAL"
+        if direction == "NO_SIGNAL":
+            return None
+
     return Signal(
         symbol=symbol,
-        direction=score.direction,
+        direction=direction,
         expiry="1m",
         confidence=score.confidence,
         entry_time_utc=entry_time_utc,
         score=score.score,
         reasons=score.reasons + ("Target: next M1 candle direction",),
-        next_candle_direction=score.next_candle_direction,
+        next_candle_direction=score.next_candle_direction or direction,
     )

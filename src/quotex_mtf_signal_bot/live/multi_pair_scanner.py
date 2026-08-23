@@ -16,16 +16,18 @@ class ScannerSnapshot:
 
 
 class MultiPairScanner:
-    """Run the closed-candle M1/M5/M15 pipeline for every canonical FX pair.
+    """Run the closed-candle M1/M5/M15 pipeline for every canonical FX pair."""
 
-    The public universe uses clean six-letter currency-pair names. MT5 broker
-    suffixes are kept only in SymbolRegistry's internal routing map, so a
-    Quotex-style ``-OTC`` suffix never changes pair identity or excludes it.
-    """
-
-    def __init__(self, adapter: MarketDataAdapter, on_signal: Callable[[Signal], None]) -> None:
+    def __init__(
+        self,
+        adapter: MarketDataAdapter,
+        on_signal: Callable[[Signal], None],
+        *,
+        server_offset_seconds: int | float = 6 * 60 * 60,
+    ) -> None:
         self.adapter = adapter
         self.on_signal = on_signal
+        self.server_offset_seconds = server_offset_seconds
         self.registry = SymbolRegistry.from_mt5(adapter)
         self.managers: dict[str, LiveCandleManager] = {}
         self.services: dict[str, LiveMTFSignalService] = {}
@@ -37,14 +39,17 @@ class MultiPairScanner:
         symbols = self.registry.symbols
         self._broker_symbols = {symbol: self.registry.broker_symbol(symbol) for symbol in symbols}
         self.managers = {
-            symbol: LiveCandleManager(self.adapter, self._broker_symbols[symbol])
+            symbol: LiveCandleManager(
+                self.adapter,
+                self._broker_symbols[symbol],
+                server_offset_seconds=self.server_offset_seconds,
+            )
             for symbol in symbols
         }
         self.services = {symbol: LiveMTFSignalService(symbol) for symbol in symbols}
         return ScannerSnapshot(symbols)
 
     def warm_up(self, history_count: int = 200) -> None:
-        """Seed every discovered pair from MT5 before the first live tick."""
         for symbol, manager in self.managers.items():
             history = manager.seed_history(history_count)
             self.services[symbol].seed_history(history)

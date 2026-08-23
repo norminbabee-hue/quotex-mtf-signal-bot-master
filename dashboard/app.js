@@ -1,7 +1,28 @@
 const emptyMetrics = { total: 0, wins: 0, losses: 0, ties: 0, winRate: 0, lossRate: 0, winStreak: 0, lossStreak: 0 };
 
-function render(data = { metrics: emptyMetrics, trades: [] }) {
-  const metrics = data.metrics || emptyMetrics;
+const emptyLive = {
+  status: 'WAITING',
+  serverTime: null,
+  mt5Status: 'OFFLINE',
+  lastTick: null,
+  nextCandle: null,
+  feedAgeSeconds: null,
+  signal: null,
+  candles: {}
+};
+
+function text(id, value = '—') {
+  const node = document.getElementById(id);
+  if (node) node.textContent = value;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
+
+function renderMetrics(metrics = emptyMetrics) {
   const values = {
     total: metrics.total ?? 0,
     wins: metrics.wins ?? 0,
@@ -12,12 +33,14 @@ function render(data = { metrics: emptyMetrics, trades: [] }) {
     winStreak: metrics.winStreak ?? 0,
     lossStreak: metrics.lossStreak ?? 0,
   };
-  for (const [id, value] of Object.entries(values)) document.getElementById(id).textContent = value;
+  Object.entries(values).forEach(([id, value]) => text(id, value));
+}
 
-  const rows = (data.trades || []).slice(-50).reverse();
+function renderTrades(trades = []) {
+  const rows = trades.slice(-50).reverse();
   const tbody = document.getElementById('results');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted">No backtest data loaded yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">No signal data loaded yet.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((trade) => `
@@ -31,22 +54,76 @@ function render(data = { metrics: emptyMetrics, trades: [] }) {
     </tr>`).join('');
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[char]);
+function renderSignal(signal) {
+  if (!signal) {
+    text('signalState', 'WAITING');
+    text('signalDirection', '—');
+    text('signalConfidence', '—');
+    text('signalExpiry', '—');
+    text('sourceCandle', '—');
+    text('signalNote', 'A signal will appear only after the source candle is confirmed closed.');
+    return;
+  }
+  text('signalState', signal.direction && signal.direction !== 'NONE' ? 'READY' : 'WAITING');
+  text('signalDirection', signal.direction ?? '—');
+  text('signalConfidence', signal.confidence == null ? '—' : `${Number(signal.confidence).toFixed(1)}%`);
+  text('signalExpiry', signal.expiry_minutes == null ? '—' : `${signal.expiry_minutes} min`);
+  text('sourceCandle', signal.source_candle_time ?? '—');
+  text('signalNote', signal.note ?? 'Prediction is based on confirmed M1/M5/M15 candle data.');
+}
+
+function renderTimeframe(tf, candle = {}) {
+  const prefix = tf.toLowerCase();
+  text(`${prefix}State`, candle.state ?? 'WAITING');
+  text(`${prefix}Price`, candle.price ?? '—');
+  text(`${prefix}Close`, candle.close ?? '—');
+  text(`${prefix}Direction`, candle.direction ?? '—');
+  text(`${prefix}Time`, candle.closed_at ?? '—');
+}
+
+function renderLive(live = emptyLive) {
+  text('overallStatusText', live.status ?? 'WAITING');
+  text('serverClock', live.serverTime ?? '—');
+  text('mt5Status', live.mt5Status ?? 'OFFLINE');
+  text('lastTick', live.lastTick ?? '—');
+  text('nextCandle', live.nextCandle ?? '—');
+  text('feedAge', live.feedAgeSeconds == null ? '—' : `${live.feedAgeSeconds}s`);
+  renderSignal(live.signal);
+  renderTimeframe('M1', live.candles?.M1);
+  renderTimeframe('M5', live.candles?.M5);
+  renderTimeframe('M15', live.candles?.M15);
 }
 
 async function loadResults() {
+  const pair = document.getElementById('pair').value;
+  const timeframe = document.getElementById('timeframe').value;
   try {
-    const response = await fetch('../data/backtest.json', { cache: 'no-store' });
+    const response = await fetch(`../data/backtest.json?pair=${encodeURIComponent(pair)}&timeframe=${timeframe}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    render(await response.json());
+    const data = await response.json();
+    renderMetrics(data.metrics || emptyMetrics);
+    renderTrades(data.trades || []);
+    text('lastUpdated', `Updated ${new Date().toLocaleTimeString()}`);
   } catch (error) {
     console.warn('Backtest JSON is not available yet:', error.message);
-    render();
+    renderMetrics();
+    renderTrades();
+    text('lastUpdated', 'Waiting for data');
+  }
+
+  // Optional live snapshot. The dashboard remains usable when the live endpoint
+  // is not running, which keeps the static/backtest workflow backward compatible.
+  try {
+    const liveResponse = await fetch(`../data/live.json?pair=${encodeURIComponent(pair)}&timeframe=${timeframe}`, { cache: 'no-store' });
+    if (!liveResponse.ok) throw new Error(`HTTP ${liveResponse.status}`);
+    renderLive(await liveResponse.json());
+  } catch (error) {
+    renderLive();
   }
 }
 
 document.getElementById('refresh').addEventListener('click', loadResults);
+document.getElementById('pair').addEventListener('change', loadResults);
+document.getElementById('timeframe').addEventListener('change', loadResults);
 loadResults();
+setInterval(loadResults, 5000);

@@ -18,6 +18,8 @@ class ScannerSnapshot:
 class MultiPairScanner:
     """Run the closed-candle M1/M5/M15 pipeline for every canonical FX pair."""
 
+    _TIMEFRAME_PRIORITY = {900: 0, 300: 1, 60: 2}
+
     def __init__(
         self,
         adapter: MarketDataAdapter,
@@ -65,7 +67,12 @@ class MultiPairScanner:
             return
         if tick.symbol != broker_symbol:
             return
-        for event in manager.on_tick(tick):
+
+        events = manager.on_tick(tick)
+        # At a shared boundary, update M15 and M5 before M1 so the M1
+        # prediction sees all three candles that just closed.
+        events.sort(key=lambda event: self._TIMEFRAME_PRIORITY[event.candle.timeframe_seconds])
+        for event in events:
             signal = service.on_closed_candle(event.candle)
             if signal is not None:
                 self.on_signal(signal)

@@ -29,7 +29,12 @@ def build_from_env() -> tuple[MT5Adapter, MultiPairBot, LiveConfig]:
     )
     if config.dry_run:
         LOG.warning("DRY_RUN enabled: Telegram messages will NOT be sent")
-    bot = MultiPairBot(adapter, publisher, audit=audit)
+    bot = MultiPairBot(
+        adapter,
+        publisher,
+        audit=audit,
+        server_offset_seconds=config.quotex_server_offset_seconds,
+    )
     return adapter, bot, config
 
 
@@ -38,6 +43,7 @@ def run_forever() -> None:
     try:
         symbols = bot.refresh_symbols()
         LOG.info("Monitoring %d major FX symbols: %s", len(symbols), ", ".join(symbols))
+        LOG.info("Quotex target server offset: %+d seconds", config.quotex_server_offset_seconds)
         bot.warm_up(config.history_count)
         while True:
             for symbol in bot.symbols:

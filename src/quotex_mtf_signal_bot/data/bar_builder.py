@@ -5,6 +5,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from quotex_mtf_signal_bot.core.models import Candle, Tick, Timeframe
+from quotex_mtf_signal_bot.data.candle_timing import (
+    DEFAULT_QUOTEX_SERVER_OFFSET_SECONDS,
+    candle_boundary_utc,
+)
 
 
 MINUTES = {Timeframe.M1: 1, Timeframe.M5: 5, Timeframe.M15: 15}
@@ -41,18 +45,20 @@ class MutableBar:
 
 
 class TickBarBuilder:
-    """Build UTC bars from timestamped ticks without using future information."""
+    """Build M1/M5/M15 bars using the configured Quotex server boundaries."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, server_offset_seconds: int | float = DEFAULT_QUOTEX_SERVER_OFFSET_SECONDS) -> None:
         self._active: dict[tuple[str, Timeframe], MutableBar] = {}
+        self.server_offset_seconds = server_offset_seconds
 
-    @staticmethod
-    def bucket_start(timestamp_utc: datetime, timeframe: Timeframe) -> datetime:
+    def bucket_start(self, timestamp_utc: datetime, timeframe: Timeframe) -> datetime:
         if timestamp_utc.tzinfo is None:
             raise ValueError("Tick timestamp must be timezone-aware")
-        ts = timestamp_utc.astimezone(timezone.utc)
-        minutes = MINUTES[timeframe]
-        return ts.replace(minute=(ts.minute // minutes) * minutes, second=0, microsecond=0)
+        return candle_boundary_utc(
+            timestamp_utc,
+            MINUTES[timeframe] * 60,
+            server_offset_seconds=self.server_offset_seconds,
+        )
 
     def update(self, tick: Tick) -> list[Candle]:
         if tick.timestamp_utc.tzinfo is None:
@@ -85,13 +91,14 @@ class TickBarBuilder:
         return closed
 
     def flush(self, now_utc: datetime) -> list[Candle]:
-        """Close bars only when their full interval has elapsed."""
+        """Close bars only after their full server-clock interval has elapsed."""
         if now_utc.tzinfo is None:
             raise ValueError("Flush time must be timezone-aware")
         result: list[Candle] = []
+        now = now_utc.astimezone(timezone.utc)
         for key, bar in list(self._active.items()):
             end = bar.start_utc + timedelta(minutes=MINUTES[bar.timeframe])
-            if now_utc.astimezone(timezone.utc) >= end:
+            if now >= end:
                 result.append(bar.closed())
                 del self._active[key]
         return result

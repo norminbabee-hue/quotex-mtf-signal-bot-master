@@ -17,10 +17,20 @@ class LiveCandleManager:
 
     TIMEFRAMES = {"M1": 60, "M5": 300, "M15": 900}
 
-    def __init__(self, adapter: MarketDataAdapter, symbol: str) -> None:
+    def __init__(
+        self,
+        adapter: MarketDataAdapter,
+        symbol: str,
+        *,
+        server_offset_seconds: int | float = 6 * 60 * 60,
+    ) -> None:
         self.adapter = adapter
         self.symbol = symbol
-        self.builders = {name: CandleBuilder(seconds) for name, seconds in self.TIMEFRAMES.items()}
+        self.server_offset_seconds = server_offset_seconds
+        self.builders = {
+            name: CandleBuilder(seconds, server_offset_seconds=server_offset_seconds)
+            for name, seconds in self.TIMEFRAMES.items()
+        }
         self.last_tick_time_utc: datetime | None = None
 
     def on_tick(self, tick: Tick) -> list[CandleCloseEvent]:
@@ -37,12 +47,7 @@ class LiveCandleManager:
         return closed
 
     def seed_history(self, count: int = 100) -> dict[str, list[MT5Bar]]:
-        """Load and return recent history so the signal service can start immediately.
-
-        MT5 history contains the currently-forming zero bar as well as completed
-        bars. The signal service removes that incomplete bar before using the
-        history for analysis.
-        """
+        """Load recent MT5 history; the signal service removes forming bars."""
         history: dict[str, list[MT5Bar]] = {}
         for timeframe in self.TIMEFRAMES:
             bars = self.adapter.bars(self.symbol, timeframe, count)

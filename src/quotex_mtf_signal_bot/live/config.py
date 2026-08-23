@@ -11,6 +11,7 @@ class LiveConfig:
     history_count: int
     poll_seconds: float
     log_level: str
+    quotex_server_offset_seconds: int
 
     @classmethod
     def from_env(cls) -> "LiveConfig":
@@ -24,7 +25,17 @@ class LiveConfig:
         if poll_seconds <= 0:
             raise ValueError("MT5_POLL_SECONDS must be positive")
         dry_run = os.getenv("DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
-        return cls(symbol, dry_run, history_count, poll_seconds, os.getenv("LOG_LEVEL", "INFO"))
+        # This is the target Quotex server-clock offset, not the PC or MT5
+        # timezone. It must be configured from the observed Quotex server clock.
+        offset = int(os.getenv("QUOTEX_SERVER_OFFSET_SECONDS", "21600"))
+        return cls(
+            symbol,
+            dry_run,
+            history_count,
+            poll_seconds,
+            os.getenv("LOG_LEVEL", "INFO"),
+            offset,
+        )
 
     def validate_secrets(self) -> None:
         required = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")

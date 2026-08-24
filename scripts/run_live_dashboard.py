@@ -60,15 +60,16 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
         label: candle_payload(manager.builders[label].current, now)
         for label in ("M1", "M5", "M15")
     }
-    current = manager.builders["M1"].current
     signal_payload = None
     if signal is not None and status == "ONLINE":
+        prediction_confidence = getattr(signal, "prediction_confidence", signal.confidence)
         signal_payload = {
             "direction": signal.next_candle_direction or signal.direction,
-            "confidence": float(signal.confidence),
+            "confidence": float(prediction_confidence),
+            "actionable_confidence": float(signal.confidence),
             "expiry_minutes": 1,
             "source_candle_time": iso(signal.entry_time_utc),
-            "note": "Prediction generated only after a confirmed M1 candle close.",
+            "note": "Prediction generated only after a confirmed M1 candle close; confidence is directional forecast strength, not a calibrated win probability.",
         }
 
     snapshot = {
@@ -77,7 +78,7 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
         "serverTime": iso(now),
         "mt5Status": status,
         "lastTick": iso(last_tick.timestamp_utc) if last_tick else None,
-        "nextCandle": iso(current.close_time_utc) if current else None,
+        "nextCandle": iso(manager.builders["M1"].current.close_time_utc) if manager.builders["M1"].current else None,
         "feedAgeSeconds": int((now - last_tick.timestamp_utc).total_seconds()) if last_tick else None,
         "pair": pair,
         "quotexServerOffsetSeconds": offset,
@@ -135,8 +136,9 @@ def main() -> None:
                         if closed_signal is not None:
                             signal = closed_signal
                             LOG.info(
-                                "NEW SIGNAL %s confidence=%.1f%% source=%s",
+                                "NEW SIGNAL %s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
                                 signal.next_candle_direction or signal.direction,
+                                float(getattr(signal, "prediction_confidence", signal.confidence)),
                                 float(signal.confidence),
                                 iso(signal.entry_time_utc),
                             )
@@ -145,8 +147,6 @@ def main() -> None:
 
                 write_snapshot(pair, manager, signal, last_tick, offset)
 
-                # The old runner intentionally stayed silent after startup. Emit a
-                # compact heartbeat so it is obvious that MT5 polling is alive.
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
                     status = feed_status(last_tick, now)

@@ -25,6 +25,14 @@ class TelegramPublisher:
         self.config = config
 
     @staticmethod
+    def _pair_label(symbol: str) -> str:
+        """Display a six-letter FX symbol as the familiar BASE/QUOTE form."""
+        compact = symbol.replace("/", "").upper()
+        if len(compact) == 6 and compact.isalpha():
+            return f"{compact[:3]}/{compact[3:]}"
+        return symbol
+
+    @staticmethod
     def _direction_label(signal: Signal) -> str:
         direction = signal.next_candle_direction or signal.direction
         return "UP ↑" if direction == "CALL" else "DOWN ↓" if direction == "PUT" else direction
@@ -43,7 +51,7 @@ class TelegramPublisher:
         target = signal.target_timeframe
         return "\n".join([
             "🔔 NEXT CANDLE SIGNAL",
-            f"PAIR: {signal.symbol}",
+            f"PAIR: {TelegramPublisher._pair_label(signal.symbol)}",
             f"TIMEFRAME: {target}",
             f"NEXT {target}: {TelegramPublisher._direction_label(signal)}",
             f"TARGET: NEXT CLOSED {target} CANDLE",
@@ -60,7 +68,7 @@ class TelegramPublisher:
         target = signal.target_timeframe
         lines = [
             "🔮 NEXT CANDLE PREDICTION",
-            f"PAIR: {signal.symbol}",
+            f"PAIR: {TelegramPublisher._pair_label(signal.symbol)}",
             f"TIMEFRAME: {target}",
             f"DIRECTION: {TelegramPublisher._direction_label(signal)}",
             f"TARGET: NEXT CLOSED {target} CANDLE",

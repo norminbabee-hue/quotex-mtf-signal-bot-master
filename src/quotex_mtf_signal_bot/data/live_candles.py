@@ -15,7 +15,10 @@ class CandleCloseEvent:
 class LiveCandleManager:
     """Maintain synchronized M1/M5/M15 candles from one MT5 tick stream."""
 
-    TIMEFRAMES = {"M1": 60, "M5": 300, "M15": 900}
+    # Close higher timeframes first. When an M1 boundary coincides with M5/M15,
+    # the signal service must already have the newly closed higher-TF candles
+    # before it analyzes the just-closed M1 candle.
+    TIMEFRAMES = {"M15": 900, "M5": 300, "M1": 60}
 
     def __init__(
         self,
@@ -49,7 +52,7 @@ class LiveCandleManager:
     def seed_history(self, count: int = 100) -> dict[str, list[MT5Bar]]:
         """Load recent MT5 history; the signal service removes forming bars."""
         history: dict[str, list[MT5Bar]] = {}
-        for timeframe in self.TIMEFRAMES:
+        for timeframe in ("M1", "M5", "M15"):
             bars = self.adapter.bars(self.symbol, timeframe, count)
             if len(bars) < count:
                 raise RuntimeError(

@@ -85,9 +85,18 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
         "candles": candles,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = OUT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    tmp.replace(OUT)
+    payload = json.dumps(snapshot, indent=2)
+    # Do not use Path.replace here: OneDrive/Windows or a dashboard reader can
+    # briefly lock live.json and make os.replace fail with WinError 5.
+    try:
+        OUT.write_text(payload, encoding="utf-8")
+    except PermissionError:
+        LOG.warning("live.json is temporarily locked; retrying snapshot write")
+        time.sleep(0.05)
+        try:
+            OUT.write_text(payload, encoding="utf-8")
+        except PermissionError:
+            LOG.warning("live.json remains locked; skipping this snapshot cycle")
 
 
 def main() -> None:

@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
-from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter
+from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter, Tick
 from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
-from quotex_mtf_signal_bot.live.mtf_signal_service import LiveMTFSignalService
+from quotex_mtf_signal_bot.live.multi_pair_scanner import MultiPairScanner
 from quotex_mtf_signal_bot.telegram.publisher import TelegramConfig, TelegramPublisher
 
 LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
@@ -46,7 +46,7 @@ def iso(value):
     return value.astimezone(timezone.utc).isoformat() if value else None
 
 
-def feed_status(last_tick, now_utc: datetime) -> str:
+def feed_status(last_tick: Tick | None, now_utc: datetime) -> str:
     if last_tick is None:
         return "WAITING_FOR_FEED"
     age = (now_utc - last_tick.timestamp_utc).total_seconds()
@@ -102,25 +102,41 @@ def signal_payload(signal):
     }
 
 
-def write_snapshot(pair: str, manager: LiveCandleManager, latest_signals: dict[str, object], last_tick, offset: int):
+def write_snapshot(
+    scanner: MultiPairScanner,
+    latest_signals: dict[str, dict[str, object]],
+    last_ticks: dict[str, Tick],
+    offset: int,
+):
     now = datetime.now(timezone.utc)
-    status = feed_status(last_tick, now)
-    candles = {label: candle_payload(manager.builders[label].current, now) for label in TIMEFRAMES}
-    predictions = {label: signal_payload(latest_signals.get(label)) for label in TIMEFRAMES}
-    primary = predictions.get("M1") or predictions.get("M5") or predictions.get("M15")
+    pairs = {}
+    for pair in scanner.registry.symbols:
+        manager = scanner.managers[pair]
+        tick = last_ticks.get(pair)
+        status = feed_status(tick, now)
+        predictions = {label: signal_payload(latest_signals.get(pair, {}).get(label)) for label in TIMEFRAMES}
+        primary = predictions.get("M1") or predictions.get("M5") or predictions.get("M15")
+        pairs[pair] = {
+            "status": "LIVE" if status == "ONLINE" else "WAITING",
+            "marketState": status,
+            "lastTick": iso(tick.timestamp_utc) if tick else None,
+            "feedAgeSeconds": int((now - tick.timestamp_utc).total_seconds()) if tick else None,
+            "brokerSymbol": scanner.broker_symbol(pair),
+            "signal": primary,
+            "predictions": predictions,
+            "candles": {label: candle_payload(manager.builders[label].current, now) for label in TIMEFRAMES},
+        }
+
     snapshot = {
-        "status": "LIVE" if status == "ONLINE" else "WAITING",
-        "marketState": status,
+        "status": "LIVE" if any(item["status"] == "LIVE" for item in pairs.values()) else "WAITING",
+        "marketState": "ONLINE" if any(item["marketState"] == "ONLINE" for item in pairs.values()) else "MARKET_CLOSED_OR_STALE",
         "serverTime": iso(now),
-        "mt5Status": status,
-        "lastTick": iso(last_tick.timestamp_utc) if last_tick else None,
-        "nextCandle": iso(manager.builders["M1"].current.close_time_utc) if manager.builders["M1"].current else None,
-        "feedAgeSeconds": int((now - last_tick.timestamp_utc).total_seconds()) if last_tick else None,
-        "pair": pair,
+        "mt5Status": "ONLINE" if any(item["marketState"] == "ONLINE" for item in pairs.values()) else "WAITING",
         "quotexServerOffsetSeconds": offset,
-        "signal": primary,
-        "predictions": predictions,
-        "candles": candles,
+        "pairCount": len(pairs),
+        "pairs": pairs,
+        # Backward-compatible single-pair fields for the existing dashboard UI.
+        "pair": scanner.registry.symbols[0] if scanner.registry.symbols else None,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(snapshot, indent=2)
@@ -151,77 +167,116 @@ def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
     actionable = float(signal.confidence) > 0
     if actionable:
         publisher.publish(signal)
-        LOG.info("TELEGRAM SENT actionable signal direction=%s target=%s", signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
+        LOG.info(
+            "TELEGRAM SENT pair=%s direction=%s target=%s",
+            signal.symbol,
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
         return
     if os.getenv("TELEGRAM_SEND_PREDICTIONS", "false").strip().lower() in {"1", "true", "yes", "on"}:
         reasons = getattr(signal, "reasons", ())
         rejection_reason = reasons[-1] if reasons else "action gate rejected"
         publisher.publish_prediction(signal, rejection_reason)
-        LOG.info("TELEGRAM SENT research prediction direction=%s target=%s", signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
+        LOG.info(
+            "TELEGRAM SENT prediction pair=%s direction=%s target=%s",
+            signal.symbol,
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
 
 
 def main() -> None:
-    pair = os.getenv("MT5_SYMBOL", "EURUSD").strip().upper()
     offset = int(os.getenv("QUOTEX_SERVER_OFFSET_SECONDS", "21600"))
     poll = float(os.getenv("MT5_POLL_SECONDS", "0.25"))
     history_count = max(60, int(os.getenv("MT5_HISTORY_COUNT", "200")))
     path = os.getenv("MT5_PATH") or None
+    pair_filter = tuple(
+        item.strip().upper()
+        for item in os.getenv("MT5_SYMBOLS", "").split(",")
+        if item.strip()
+    ) or None
+
     adapter = MT5Adapter(path=path)
     try:
-        registry = SymbolRegistry.from_mt5(adapter, candidates=(pair,))
-        if pair not in registry.symbols:
-            raise RuntimeError(f"{pair} is not available in the connected MT5 terminal")
-        broker_symbol = registry.broker_symbol(pair)
-        manager = LiveCandleManager(adapter, broker_symbol, server_offset_seconds=offset)
-        service = LiveMTFSignalService(pair)
         telegram = telegram_publisher_from_env()
-        service.seed_history(manager.seed_history(history_count))
-        last_tick = adapter.latest_tick(broker_symbol)
-        manager.on_tick(last_tick)
-        latest_signals: dict[str, object] = {}
-        cycle = 0
-        last_report = 0.0
-        LOG.info("Live dashboard started for %s (%s), Quotex offset %+d sec", pair, broker_symbol, offset)
-        while True:
+        latest_signals: dict[str, dict[str, object]] = {}
+        last_ticks: dict[str, Tick] = {}
+
+        def on_signal(signal) -> None:
+            target = getattr(signal, "target_timeframe", "M1")
+            latest_signals.setdefault(signal.symbol, {})[target] = signal
+            LOG.info(
+                "NEW SIGNAL pair=%s direction=%s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%%",
+                signal.symbol,
+                signal.next_candle_direction or signal.direction,
+                target,
+                float(getattr(signal, "prediction_confidence", signal.confidence)),
+                float(signal.confidence),
+            )
+            try:
+                publish_live_signal(telegram, signal)
+            except Exception:
+                LOG.exception("Telegram publish failed; continuing multi-pair scanner")
+
+        scanner = MultiPairScanner(
+            adapter,
+            on_signal,
+            server_offset_seconds=offset,
+            candidates=pair_filter,
+        )
+        if not scanner.registry.symbols:
+            raise RuntimeError("No FX currency pairs were discovered in the connected MT5 terminal")
+
+        LOG.info("Discovered %d FX pairs: %s", len(scanner.registry.symbols), ", ".join(scanner.registry.symbols))
+        scanner.warm_up(history_count)
+
+        # Seed each pair with its current tick before entering the live loop.
+        for pair in scanner.registry.symbols:
+            broker_symbol = scanner.broker_symbol(pair)
             try:
                 tick = adapter.latest_tick(broker_symbol)
-                now = datetime.now(timezone.utc)
-                age = (now - tick.timestamp_utc).total_seconds()
+                last_ticks[pair] = tick
+                scanner.managers[pair].on_tick(tick)
+            except Exception:
+                LOG.exception("Initial tick failed for pair=%s", pair)
+
+        cycle = 0
+        last_report = 0.0
+        LOG.info("Live multi-pair dashboard started: %d FX pairs, Quotex offset %+d sec", len(scanner.registry.symbols), offset)
+
+        while True:
+            try:
                 cycle += 1
-                if age <= STALE_FEED_SECONDS:
-                    last_tick = tick
-                    events = manager.on_tick(tick)
-                    for event in events:
-                        closed_signals = service.on_closed_candle(event.candle)
-                        for closed_signal in closed_signals:
-                            target = getattr(closed_signal, "target_timeframe", "M1")
-                            latest_signals[target] = closed_signal
-                            prediction_confidence = float(getattr(closed_signal, "prediction_confidence", closed_signal.confidence))
-                            actionable_confidence = float(closed_signal.confidence)
-                            gate_reason = closed_signal.reasons[-1] if getattr(closed_signal, "reasons", ()) else "unknown"
-                            if actionable_confidence > 0:
-                                LOG.info("ACTIONABLE SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s", closed_signal.next_candle_direction or closed_signal.direction, target, prediction_confidence, actionable_confidence, iso(closed_signal.entry_time_utc))
-                            else:
-                                LOG.info("NEW PREDICTION %s target=%s prediction_confidence=%.1f%% ACTIONABLE=NO gate=%s source=%s", closed_signal.next_candle_direction or closed_signal.direction, target, prediction_confidence, gate_reason, iso(closed_signal.entry_time_utc))
-                            try:
-                                publish_live_signal(telegram, closed_signal)
-                            except Exception:
-                                LOG.exception("Telegram publish failed; continuing live dashboard")
-                else:
-                    LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
-                write_snapshot(pair, manager, latest_signals, last_tick, offset)
+                for pair in scanner.registry.symbols:
+                    broker_symbol = scanner.broker_symbol(pair)
+                    try:
+                        tick = adapter.latest_tick(broker_symbol)
+                    except Exception:
+                        LOG.exception("MT5 tick read failed for pair=%s", pair)
+                        continue
+
+                    now = datetime.now(timezone.utc)
+                    age = (now - tick.timestamp_utc).total_seconds()
+                    if age <= STALE_FEED_SECONDS:
+                        last_ticks[pair] = tick
+                        scanner.on_tick(tick)
+
+                write_snapshot(scanner, latest_signals, last_ticks, offset)
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
-                    status = feed_status(last_tick, now)
-                    current = manager.builders["M1"].current
-                    LOG.info("LIVE heartbeat cycle=%d status=%s tick_age=%.2fs bid=%s M1=%s M5=%s M15=%s", cycle, status, age, tick.bid, iso(current.open_time_utc) if current else "WAITING", iso(manager.builders["M5"].current.open_time_utc) if manager.builders["M5"].current else "WAITING", iso(manager.builders["M15"].current.open_time_utc) if manager.builders["M15"].current else "WAITING")
+                    online = sum(feed_status(last_ticks.get(pair), datetime.now(timezone.utc)) == "ONLINE" for pair in scanner.registry.symbols)
+                    LOG.info("LIVE heartbeat cycle=%d pairs=%d online=%d", cycle, len(scanner.registry.symbols), online)
                     last_report = now_mono
                 time.sleep(poll)
             except KeyboardInterrupt:
                 raise
             except Exception:
                 LOG.exception("Live dashboard cycle failed")
-                write_snapshot(pair, manager, latest_signals, last_tick, offset)
+                try:
+                    write_snapshot(scanner, latest_signals, last_ticks, offset)
+                except Exception:
+                    LOG.exception("Snapshot write failed")
                 time.sleep(max(1.0, poll))
     finally:
         adapter.close()

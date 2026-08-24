@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from quotex_mtf_signal_bot.analysis.mtf import MTFAnalysis
+from quotex_mtf_signal_bot.core.models import Timeframe
 from quotex_mtf_signal_bot.signals.scoring import SignalScore, score_mtf
 
 
@@ -17,16 +18,23 @@ class Signal:
     entry_time_utc: datetime
     score: int = 0
     reasons: tuple[str, ...] = ()
-    # Explicit prediction target: the direction of the NEXT closed M1 candle.
+    # Explicit prediction target: the direction of the NEXT closed candle.
     # CALL = UP, PUT = DOWN. Kept optional for backward-compatible test stubs.
     next_candle_direction: str | None = None
     # Forecast strength is separate from the stricter actionable confidence.
     # It is a directional score, not a calibrated probability of winning.
     prediction_confidence: Decimal = Decimal("0")
+    # The timeframe whose next candle is being predicted.
+    target_timeframe: str = "M1"
 
 
-def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -> Signal | None:
-    score: SignalScore = score_mtf(analysis)
+def build_signal(
+    symbol: str,
+    entry_time_utc: datetime,
+    analysis: MTFAnalysis,
+    target_timeframe: Timeframe = Timeframe.M1,
+) -> Signal | None:
+    score: SignalScore = score_mtf(analysis, target_timeframe=target_timeframe)
 
     # A next-candle prediction is useful even when the stricter actionable
     # signal gates reject the setup. The live UI/Telegram layer can therefore
@@ -41,11 +49,12 @@ def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -
     return Signal(
         symbol=symbol,
         direction=direction,
-        expiry="1m",
+        expiry=f"{target_timeframe.minutes}m",
         confidence=score.confidence,
         entry_time_utc=entry_time_utc,
         score=score.score,
-        reasons=score.reasons + ("Target: next M1 candle direction",),
+        reasons=score.reasons + (f"Target: next {target_timeframe.value} candle direction",),
         next_candle_direction=score.next_candle_direction or direction,
         prediction_confidence=score.prediction_confidence,
+        target_timeframe=target_timeframe.value,
     )

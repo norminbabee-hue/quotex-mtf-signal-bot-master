@@ -16,6 +16,7 @@ LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "live.json"
 STALE_FEED_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "30"))
+TIMEFRAMES = ("M1", "M5", "M15")
 
 
 def iso(value):
@@ -53,35 +54,49 @@ def candle_payload(candle, now_utc: datetime):
     }
 
 
-def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, offset: int):
+def signal_payload(signal):
+    if signal is None:
+        return None
+    prediction_confidence = float(getattr(signal, "prediction_confidence", signal.confidence))
+    actionable_confidence = float(signal.confidence)
+    actionable = actionable_confidence > 0
+    reasons = list(getattr(signal, "reasons", ()))
+    gate_reason = None if actionable else (reasons[-1] if reasons else "action gate rejected")
+    target = getattr(signal, "target_timeframe", "M1")
+    return {
+        "direction": signal.next_candle_direction or signal.direction,
+        "target_timeframe": target,
+        "confidence": prediction_confidence,
+        "prediction_confidence": prediction_confidence,
+        "actionable_confidence": actionable_confidence,
+        "actionable": actionable,
+        "status": "ACTIONABLE" if actionable else "PREDICTION_ONLY",
+        "gate_reason": gate_reason,
+        "reasons": reasons,
+        "expiry_minutes": {"M1": 1, "M5": 5, "M15": 15}.get(target, 1),
+        "source_candle_time": iso(signal.entry_time_utc),
+        "note": "Prediction confidence is directional forecast strength, not a calibrated win probability. Actionable is true only when the stricter live action gate passes.",
+    }
+
+
+def write_snapshot(
+    pair: str,
+    manager: LiveCandleManager,
+    latest_signals: dict[str, object],
+    last_tick,
+    offset: int,
+):
     now = datetime.now(timezone.utc)
     status = feed_status(last_tick, now)
     candles = {
         label: candle_payload(manager.builders[label].current, now)
-        for label in ("M1", "M5", "M15")
+        for label in TIMEFRAMES
     }
-    signal_payload = None
-    if signal is not None and status == "ONLINE":
-        prediction_confidence = getattr(signal, "prediction_confidence", signal.confidence)
-        actionable_confidence = signal.confidence
-        actionable = actionable_confidence > 0
-        gate_reason = None
-        if not actionable and getattr(signal, "reasons", ()):
-            gate_reason = signal.reasons[-1]
-        signal_payload = {
-            "direction": signal.next_candle_direction or signal.direction,
-            "target_timeframe": getattr(signal, "target_timeframe", "M1"),
-            "confidence": float(prediction_confidence),
-            "prediction_confidence": float(prediction_confidence),
-            "actionable_confidence": float(actionable_confidence),
-            "actionable": actionable,
-            "status": "ACTIONABLE" if actionable else "PREDICTION_ONLY",
-            "gate_reason": gate_reason,
-            "reasons": list(getattr(signal, "reasons", ())),
-            "expiry_minutes": getattr(signal, "target_timeframe", "M1") and {"M1": 1, "M5": 5, "M15": 15}.get(getattr(signal, "target_timeframe", "M1"), 1),
-            "source_candle_time": iso(signal.entry_time_utc),
-            "note": "Prediction confidence is directional forecast strength, not a calibrated win probability. Actionable is true only when the stricter live action gate passes.",
-        }
+    predictions = {
+        label: signal_payload(latest_signals.get(label))
+        for label in TIMEFRAMES
+    }
+    primary = predictions.get("M1") or predictions.get("M5") or predictions.get("M15")
 
     snapshot = {
         "status": "LIVE" if status == "ONLINE" else "WAITING",
@@ -93,7 +108,8 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
         "feedAgeSeconds": int((now - last_tick.timestamp_utc).total_seconds()) if last_tick else None,
         "pair": pair,
         "quotexServerOffsetSeconds": offset,
-        "signal": signal_payload,
+        "signal": primary,
+        "predictions": predictions,
         "candles": candles,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +144,7 @@ def main() -> None:
 
         last_tick = adapter.latest_tick(broker_symbol)
         manager.on_tick(last_tick)
-        signal = None
+        latest_signals: dict[str, object] = {}
         cycle = 0
         last_report = 0.0
         LOG.info("Live dashboard started for %s (%s), Quotex offset %+d sec", pair, broker_symbol, offset)
@@ -145,32 +161,33 @@ def main() -> None:
                     for event in events:
                         closed_signals = service.on_closed_candle(event.candle)
                         for closed_signal in closed_signals:
-                            signal = closed_signal
-                            prediction_confidence = float(getattr(signal, "prediction_confidence", signal.confidence))
-                            actionable_confidence = float(signal.confidence)
-                            gate_reason = signal.reasons[-1] if getattr(signal, "reasons", ()) else "unknown"
+                            target = getattr(closed_signal, "target_timeframe", "M1")
+                            latest_signals[target] = closed_signal
+                            prediction_confidence = float(getattr(closed_signal, "prediction_confidence", closed_signal.confidence))
+                            actionable_confidence = float(closed_signal.confidence)
+                            gate_reason = closed_signal.reasons[-1] if getattr(closed_signal, "reasons", ()) else "unknown"
                             if actionable_confidence > 0:
                                 LOG.info(
                                     "ACTIONABLE SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
-                                    signal.next_candle_direction or signal.direction,
-                                    getattr(signal, "target_timeframe", "M1"),
+                                    closed_signal.next_candle_direction or closed_signal.direction,
+                                    target,
                                     prediction_confidence,
                                     actionable_confidence,
-                                    iso(signal.entry_time_utc),
+                                    iso(closed_signal.entry_time_utc),
                                 )
                             else:
                                 LOG.info(
                                     "NEW PREDICTION %s target=%s prediction_confidence=%.1f%% ACTIONABLE=NO gate=%s source=%s",
-                                    signal.next_candle_direction or signal.direction,
-                                    getattr(signal, "target_timeframe", "M1"),
+                                    closed_signal.next_candle_direction or closed_signal.direction,
+                                    target,
                                     prediction_confidence,
                                     gate_reason,
-                                    iso(signal.entry_time_utc),
+                                    iso(closed_signal.entry_time_utc),
                                 )
                 else:
                     LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
 
-                write_snapshot(pair, manager, signal, last_tick, offset)
+                write_snapshot(pair, manager, latest_signals, last_tick, offset)
 
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
@@ -192,7 +209,7 @@ def main() -> None:
                 raise
             except Exception:
                 LOG.exception("Live dashboard cycle failed")
-                write_snapshot(pair, manager, signal, last_tick, offset)
+                write_snapshot(pair, manager, latest_signals, last_tick, offset)
                 time.sleep(max(1.0, poll))
     finally:
         adapter.close()

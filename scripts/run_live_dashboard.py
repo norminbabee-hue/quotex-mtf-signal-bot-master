@@ -11,6 +11,7 @@ from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
 from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter
 from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 from quotex_mtf_signal_bot.live.mtf_signal_service import LiveMTFSignalService
+from quotex_mtf_signal_bot.telegram.publisher import TelegramConfig, TelegramPublisher
 
 LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +126,50 @@ def write_snapshot(
             LOG.warning("live.json remains locked; skipping this snapshot cycle")
 
 
+def telegram_publisher_from_env() -> TelegramPublisher | None:
+    """Create the Telegram publisher only when both secrets are configured.
+
+    Required environment variables:
+      TELEGRAM_BOT_TOKEN
+      TELEGRAM_CHAT_ID
+
+    Optional:
+      TELEGRAM_SEND_PREDICTIONS=true  -> also send non-actionable predictions.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        LOG.info("Telegram publisher disabled: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured")
+        return None
+    return TelegramPublisher(TelegramConfig(bot_token=token, chat_id=chat_id))
+
+
+def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
+    """Publish actionable signals; optionally publish research-only predictions."""
+    if publisher is None or signal is None:
+        return
+
+    actionable = float(signal.confidence) > 0
+    if actionable:
+        publisher.publish(signal)
+        LOG.info(
+            "TELEGRAM SENT actionable signal direction=%s target=%s",
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
+        return
+
+    if os.getenv("TELEGRAM_SEND_PREDICTIONS", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        reasons = getattr(signal, "reasons", ())
+        rejection_reason = reasons[-1] if reasons else "action gate rejected"
+        publisher.publish_prediction(signal, rejection_reason)
+        LOG.info(
+            "TELEGRAM SENT research prediction direction=%s target=%s",
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
+
+
 def main() -> None:
     pair = os.getenv("MT5_SYMBOL", "EURUSD").strip().upper()
     offset = int(os.getenv("QUOTEX_SERVER_OFFSET_SECONDS", "21600"))
@@ -140,6 +185,7 @@ def main() -> None:
         broker_symbol = registry.broker_symbol(pair)
         manager = LiveCandleManager(adapter, broker_symbol, server_offset_seconds=offset)
         service = LiveMTFSignalService(pair)
+        telegram = telegram_publisher_from_env()
         service.seed_history(manager.seed_history(history_count))
 
         last_tick = adapter.latest_tick(broker_symbol)
@@ -184,6 +230,10 @@ def main() -> None:
                                     gate_reason,
                                     iso(closed_signal.entry_time_utc),
                                 )
+                            try:
+                                publish_live_signal(telegram, closed_signal)
+                            except Exception:
+                                LOG.exception("Telegram publish failed; continuing live dashboard")
                 else:
                     LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
 

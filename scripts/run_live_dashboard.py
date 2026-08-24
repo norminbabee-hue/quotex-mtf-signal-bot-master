@@ -15,7 +15,7 @@ from quotex_mtf_signal_bot.live.mtf_signal_service import LiveMTFSignalService
 LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "live.json"
-STALE_FEED_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "10"))
+STALE_FEED_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "30"))
 
 
 def iso(value):
@@ -53,11 +53,14 @@ def candle_payload(candle, now_utc: datetime):
     }
 
 
-def write_snapshot(pair: str, managers, signal, last_tick, offset: int):
+def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, offset: int):
     now = datetime.now(timezone.utc)
     status = feed_status(last_tick, now)
-    candles = {label: candle_payload(managers[label].current, now) for label in ("M1", "M5", "M15")}
-    current = managers["M1"].current
+    candles = {
+        label: candle_payload(manager.builders[label].current, now)
+        for label in ("M1", "M5", "M15")
+    }
+    current = manager.builders["M1"].current
     signal_payload = None
     if signal is not None and status == "ONLINE":
         signal_payload = {
@@ -103,14 +106,9 @@ def main() -> None:
         manager = LiveCandleManager(adapter, broker_symbol, server_offset_seconds=offset)
         service = LiveMTFSignalService(pair)
         service.seed_history(manager.seed_history(history_count))
-        managers = {
-            "M1": manager,
-            "M5": LiveCandleManager(adapter, broker_symbol, server_offset_seconds=offset),
-            "M15": LiveCandleManager(adapter, broker_symbol, server_offset_seconds=offset),
-        }
+
         last_tick = adapter.latest_tick(broker_symbol)
-        for builder in managers.values():
-            builder.on_tick(last_tick)
+        manager.on_tick(last_tick)
         signal = None
         LOG.info("Live dashboard started for %s (%s), Quotex offset %+d sec", pair, broker_symbol, offset)
 
@@ -118,22 +116,25 @@ def main() -> None:
             try:
                 tick = adapter.latest_tick(broker_symbol)
                 now = datetime.now(timezone.utc)
-                if (now - tick.timestamp_utc).total_seconds() <= STALE_FEED_SECONDS:
+                age = (now - tick.timestamp_utc).total_seconds()
+                if age <= STALE_FEED_SECONDS:
                     last_tick = tick
-                    for label, builder in managers.items():
-                        events = builder.on_tick(tick)
-                        if label == "M1":
-                            for event in events:
-                                signal = service.on_closed_candle(event.candle)
+                    events = manager.on_tick(tick)
+                    # A single synchronized stream is required so that at a
+                    # shared boundary M15 and M5 close before the M1 signal.
+                    for event in events:
+                        closed_signal = service.on_closed_candle(event.candle)
+                        if closed_signal is not None:
+                            signal = closed_signal
                 else:
-                    LOG.info("No fresh MT5 tick; treating feed as closed/stale")
-                write_snapshot(pair, managers, signal, last_tick, offset)
+                    LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
+                write_snapshot(pair, manager, signal, last_tick, offset)
                 time.sleep(poll)
             except KeyboardInterrupt:
                 raise
             except Exception:
                 LOG.exception("Live dashboard cycle failed")
-                write_snapshot(pair, managers, signal, last_tick, offset)
+                write_snapshot(pair, manager, signal, last_tick, offset)
                 time.sleep(max(1.0, poll))
     finally:
         adapter.close()

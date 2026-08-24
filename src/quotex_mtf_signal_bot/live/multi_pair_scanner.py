@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterable
 
 from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
 from quotex_mtf_signal_bot.data.mt5_adapter import MarketDataAdapter, Tick
@@ -16,7 +16,7 @@ class ScannerSnapshot:
 
 
 class MultiPairScanner:
-    """Run the closed-candle M1/M5/M15 pipeline for every canonical FX pair."""
+    """Run the closed-candle M1/M5/M15 pipeline for every selected FX pair."""
 
     _TIMEFRAME_PRIORITY = {900: 0, 300: 1, 60: 2}
 
@@ -26,18 +26,20 @@ class MultiPairScanner:
         on_signal: Callable[[Signal], None],
         *,
         server_offset_seconds: int | float = 6 * 60 * 60,
+        candidates: Iterable[str] | None = None,
     ) -> None:
         self.adapter = adapter
         self.on_signal = on_signal
         self.server_offset_seconds = server_offset_seconds
-        self.registry = SymbolRegistry.from_mt5(adapter)
+        self.candidates = tuple(candidates) if candidates is not None else None
+        self.registry = SymbolRegistry.from_mt5(adapter, candidates=self.candidates)
         self.managers: dict[str, LiveCandleManager] = {}
         self.services: dict[str, LiveMTFSignalService] = {}
         self._broker_symbols: dict[str, str] = {}
         self.refresh()
 
     def refresh(self) -> ScannerSnapshot:
-        self.registry = SymbolRegistry.from_mt5(self.adapter)
+        self.registry = SymbolRegistry.from_mt5(self.adapter, candidates=self.candidates)
         symbols = self.registry.symbols
         self._broker_symbols = {symbol: self.registry.broker_symbol(symbol) for symbol in symbols}
         self.managers = {
@@ -50,6 +52,12 @@ class MultiPairScanner:
         }
         self.services = {symbol: LiveMTFSignalService(symbol) for symbol in symbols}
         return ScannerSnapshot(symbols)
+
+    def broker_symbol(self, canonical: str) -> str:
+        return self._broker_symbols[canonical]
+
+    def broker_symbols(self) -> dict[str, str]:
+        return dict(self._broker_symbols)
 
     def warm_up(self, history_count: int = 200) -> None:
         for symbol, manager in self.managers.items():
@@ -73,6 +81,6 @@ class MultiPairScanner:
         # prediction sees all three candles that just closed.
         events.sort(key=lambda event: self._TIMEFRAME_PRIORITY[event.candle.timeframe_seconds])
         for event in events:
-            signal = service.on_closed_candle(event.candle)
-            if signal is not None:
+            signals = service.on_closed_candle(event.candle)
+            for signal in signals:
                 self.on_signal(signal)

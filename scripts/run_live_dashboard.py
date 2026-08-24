@@ -86,8 +86,6 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(snapshot, indent=2)
-    # Do not use Path.replace here: OneDrive/Windows or a dashboard reader can
-    # briefly lock live.json and make os.replace fail with WinError 5.
     try:
         OUT.write_text(payload, encoding="utf-8")
     except PermissionError:
@@ -119,6 +117,8 @@ def main() -> None:
         last_tick = adapter.latest_tick(broker_symbol)
         manager.on_tick(last_tick)
         signal = None
+        cycle = 0
+        last_report = 0.0
         LOG.info("Live dashboard started for %s (%s), Quotex offset %+d sec", pair, broker_symbol, offset)
 
         while True:
@@ -126,18 +126,42 @@ def main() -> None:
                 tick = adapter.latest_tick(broker_symbol)
                 now = datetime.now(timezone.utc)
                 age = (now - tick.timestamp_utc).total_seconds()
+                cycle += 1
                 if age <= STALE_FEED_SECONDS:
                     last_tick = tick
                     events = manager.on_tick(tick)
-                    # A single synchronized stream is required so that at a
-                    # shared boundary M15 and M5 close before the M1 signal.
                     for event in events:
                         closed_signal = service.on_closed_candle(event.candle)
                         if closed_signal is not None:
                             signal = closed_signal
+                            LOG.info(
+                                "NEW SIGNAL %s confidence=%.1f%% source=%s",
+                                signal.next_candle_direction or signal.direction,
+                                float(signal.confidence),
+                                iso(signal.entry_time_utc),
+                            )
                 else:
                     LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
+
                 write_snapshot(pair, manager, signal, last_tick, offset)
+
+                # The old runner intentionally stayed silent after startup. Emit a
+                # compact heartbeat so it is obvious that MT5 polling is alive.
+                now_mono = time.monotonic()
+                if now_mono - last_report >= 5.0:
+                    status = feed_status(last_tick, now)
+                    current = manager.builders["M1"].current
+                    LOG.info(
+                        "LIVE heartbeat cycle=%d status=%s tick_age=%.2fs bid=%s M1=%s M5=%s M15=%s",
+                        cycle,
+                        status,
+                        age,
+                        tick.bid,
+                        iso(current.open_time_utc) if current else "WAITING",
+                        iso(manager.builders["M5"].current.open_time_utc) if manager.builders["M5"].current else "WAITING",
+                        iso(manager.builders["M15"].current.open_time_utc) if manager.builders["M15"].current else "WAITING",
+                    )
+                    last_report = now_mono
                 time.sleep(poll)
             except KeyboardInterrupt:
                 raise

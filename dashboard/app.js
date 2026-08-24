@@ -8,6 +8,7 @@ const emptyLive = {
   nextCandle: null,
   feedAgeSeconds: null,
   signal: null,
+  predictions: {},
   candles: {}
 };
 
@@ -62,18 +63,32 @@ function renderSignal(signal) {
     text('signalPredictionConfidence', '—');
     text('signalActionableConfidence', '—');
     text('signalExpiry', '—');
+    text('signalGate', '—');
     text('sourceCandle', '—');
     text('signalNote', 'A prediction will appear only after the target candle is confirmed closed.');
     return;
   }
-  text('signalState', signal.direction && signal.direction !== 'NONE' ? 'READY' : 'WAITING');
+  const actionable = signal.actionable === true;
+  text('signalState', actionable ? 'ACTIONABLE' : 'PREDICTION ONLY');
   text('signalDirection', signal.direction ?? '—');
   text('signalTarget', signal.target_timeframe ? `Next ${signal.target_timeframe}` : 'Next M1');
   text('signalPredictionConfidence', signal.prediction_confidence == null ? '—' : `${Number(signal.prediction_confidence).toFixed(1)}%`);
   text('signalActionableConfidence', signal.actionable_confidence == null ? '—' : `${Number(signal.actionable_confidence).toFixed(1)}%`);
   text('signalExpiry', signal.expiry_minutes == null ? '—' : `${signal.expiry_minutes} min`);
+  text('signalGate', actionable ? 'PASS' : (signal.gate_reason ?? 'REJECTED'));
   text('sourceCandle', signal.source_candle_time ?? '—');
   text('signalNote', signal.note ?? 'Prediction is based on confirmed M1/M5/M15 candle data.');
+}
+
+function renderPredictions(predictions = {}) {
+  for (const tf of ['M1', 'M5', 'M15']) {
+    const p = predictions[tf];
+    const prefix = tf.toLowerCase();
+    text(`${prefix}Prediction`, p?.direction ?? '—');
+    text(`${prefix}PredictionConfidence`, p?.prediction_confidence == null ? '—' : `${Number(p.prediction_confidence).toFixed(1)}%`);
+    text(`${prefix}Action`, p ? (p.actionable ? 'ACTIONABLE' : 'PREDICTION ONLY') : '—');
+    text(`${prefix}Gate`, p ? (p.actionable ? 'PASS' : (p.gate_reason ?? 'REJECTED')) : '—');
+  }
 }
 
 function renderTimeframe(tf, candle = {}) {
@@ -93,6 +108,7 @@ function renderLive(live = emptyLive) {
   text('nextCandle', live.nextCandle ?? '—');
   text('feedAge', live.feedAgeSeconds == null ? '—' : `${live.feedAgeSeconds}s`);
   renderSignal(live.signal);
+  renderPredictions(live.predictions);
   renderTimeframe('M1', live.candles?.M1);
   renderTimeframe('M5', live.candles?.M5);
   renderTimeframe('M15', live.candles?.M15);

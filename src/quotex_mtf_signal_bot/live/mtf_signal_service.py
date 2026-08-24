@@ -21,7 +21,11 @@ class LiveMTFSignalService:
             Timeframe.M5: deque(maxlen=history_size),
             Timeframe.M15: deque(maxlen=history_size),
         }
-        self._last_signal_entry_time: datetime | None = None
+        self._last_signal_entry_time: dict[Timeframe, datetime | None] = {
+            Timeframe.M1: None,
+            Timeframe.M5: None,
+            Timeframe.M15: None,
+        }
 
     @staticmethod
     def _timeframe(seconds: int) -> Timeframe:
@@ -64,26 +68,30 @@ class LiveMTFSignalService:
             for bar in completed:
                 self.history[timeframe].append(self._history_bar_to_candle(bar))
 
-    def on_closed_candle(self, live: LiveCandle) -> Signal | None:
+    def on_closed_candle(self, live: LiveCandle) -> list[Signal]:
+        """Return predictions for every requested timeframe whose boundary just closed.
+
+        M1 closes every minute, M5 every five minutes, and M15 every fifteen minutes.
+        At a shared boundary LiveCandleManager emits M15 -> M5 -> M1, so the
+        M1 prediction sees the newly completed higher-timeframe candles.
+        """
         if SymbolRegistry.canonical_symbol(live.symbol) != self.symbol:
-            return None
+            return []
         timeframe = self._timeframe(live.timeframe_seconds)
         candle = self._to_candle(live)
         self.history[timeframe].append(candle)
 
-        if timeframe is not Timeframe.M1:
-            return None
-
         required = (Timeframe.M1, Timeframe.M5, Timeframe.M15)
         if any(len(self.history[tf]) < 60 for tf in required):
-            return None
+            return []
 
         snapshot = {tf: list(self.history[tf]) for tf in required}
         analysis = analyze_mtf(snapshot)
         entry_time = live.close_time_utc.astimezone(timezone.utc)
-        if self._last_signal_entry_time == entry_time:
-            return None
-        signal = build_signal(self.symbol, entry_time, analysis)
-        if signal is not None:
-            self._last_signal_entry_time = entry_time
-        return signal
+        signal = build_signal(self.symbol, entry_time, analysis, target_timeframe=timeframe)
+        if signal is None:
+            return []
+        if self._last_signal_entry_time[timeframe] == entry_time:
+            return []
+        self._last_signal_entry_time[timeframe] = entry_time
+        return [signal]

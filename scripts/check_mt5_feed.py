@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter
 from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 
-
-MAX_TICK_AGE_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "10"))
+# Forex ticks can pause briefly even while the session is open. 30s avoids
+# falsely classifying a live feed as closed while still blocking old prices.
+MAX_TICK_AGE_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "30"))
 
 
 def main() -> int:

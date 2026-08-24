@@ -63,15 +63,24 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
     signal_payload = None
     if signal is not None and status == "ONLINE":
         prediction_confidence = getattr(signal, "prediction_confidence", signal.confidence)
+        actionable_confidence = signal.confidence
+        actionable = actionable_confidence > 0
+        gate_reason = None
+        if not actionable and getattr(signal, "reasons", ()):
+            gate_reason = signal.reasons[-1]
         signal_payload = {
             "direction": signal.next_candle_direction or signal.direction,
             "target_timeframe": getattr(signal, "target_timeframe", "M1"),
             "confidence": float(prediction_confidence),
             "prediction_confidence": float(prediction_confidence),
-            "actionable_confidence": float(signal.confidence),
+            "actionable_confidence": float(actionable_confidence),
+            "actionable": actionable,
+            "status": "ACTIONABLE" if actionable else "PREDICTION_ONLY",
+            "gate_reason": gate_reason,
+            "reasons": list(getattr(signal, "reasons", ())),
             "expiry_minutes": getattr(signal, "target_timeframe", "M1") and {"M1": 1, "M5": 5, "M15": 15}.get(getattr(signal, "target_timeframe", "M1"), 1),
             "source_candle_time": iso(signal.entry_time_utc),
-            "note": "Prediction is generated after a confirmed candle close; confidence is directional forecast strength, not a calibrated win probability.",
+            "note": "Prediction confidence is directional forecast strength, not a calibrated win probability. Actionable is true only when the stricter live action gate passes.",
         }
 
     snapshot = {
@@ -137,14 +146,27 @@ def main() -> None:
                         closed_signals = service.on_closed_candle(event.candle)
                         for closed_signal in closed_signals:
                             signal = closed_signal
-                            LOG.info(
-                                "NEW SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
-                                signal.next_candle_direction or signal.direction,
-                                getattr(signal, "target_timeframe", "M1"),
-                                float(getattr(signal, "prediction_confidence", signal.confidence)),
-                                float(signal.confidence),
-                                iso(signal.entry_time_utc),
-                            )
+                            prediction_confidence = float(getattr(signal, "prediction_confidence", signal.confidence))
+                            actionable_confidence = float(signal.confidence)
+                            gate_reason = signal.reasons[-1] if getattr(signal, "reasons", ()) else "unknown"
+                            if actionable_confidence > 0:
+                                LOG.info(
+                                    "ACTIONABLE SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
+                                    signal.next_candle_direction or signal.direction,
+                                    getattr(signal, "target_timeframe", "M1"),
+                                    prediction_confidence,
+                                    actionable_confidence,
+                                    iso(signal.entry_time_utc),
+                                )
+                            else:
+                                LOG.info(
+                                    "NEW PREDICTION %s target=%s prediction_confidence=%.1f%% ACTIONABLE=NO gate=%s source=%s",
+                                    signal.next_candle_direction or signal.direction,
+                                    getattr(signal, "target_timeframe", "M1"),
+                                    prediction_confidence,
+                                    gate_reason,
+                                    iso(signal.entry_time_utc),
+                                )
                 else:
                     LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
 

@@ -14,6 +14,9 @@ class SignalScore:
     confidence: Decimal
     reasons: tuple[str, ...]
     next_candle_direction: str | None = None
+    # Directional strength for the next-candle forecast, independent of the
+    # stricter actionable-signal gate. This is not a calibrated probability.
+    prediction_confidence: Decimal = Decimal("0")
 
 
 MIN_ALIGNMENT_SCORE = 12
@@ -50,7 +53,18 @@ def _prediction_weights(target: Timeframe) -> tuple[tuple[Timeframe, int], ...]:
     )
 
 
-def _next_candle_prediction(analysis: MTFAnalysis, target: Timeframe) -> tuple[str, int, list[str]]:
+def _prediction_confidence(up: int, down: int) -> Decimal:
+    """Return forecast strength (not a calibrated win probability)."""
+    total = up + down
+    edge = abs(up - down)
+    if total <= 0 or edge < MIN_PREDICTION_EDGE:
+        return Decimal("0")
+    # Map a barely-usable edge to 50% and a one-sided score to 95%.
+    confidence = Decimal("50") + (Decimal(edge) / Decimal(total)) * Decimal("45")
+    return min(Decimal("95"), confidence.quantize(Decimal("0.1")))
+
+
+def _next_candle_prediction(analysis: MTFAnalysis, target: Timeframe) -> tuple[str, int, list[str], Decimal]:
     """Predict the next candle of the selected M1/M5/M15 timeframe."""
     target_analysis = analysis.analyses[target]
     up = down = 0
@@ -93,13 +107,19 @@ def _next_candle_prediction(analysis: MTFAnalysis, target: Timeframe) -> tuple[s
         down += 4
         reasons.append(f"Fresh bearish {target.value} price action")
 
+    confidence = _prediction_confidence(up, down)
     if up == down or abs(up - down) < MIN_PREDICTION_EDGE:
-        return "NO_SIGNAL", max(up, down), reasons + [f"Next {target.value} prediction edge is too small"]
-    return ("CALL", up, reasons) if up > down else ("PUT", down, reasons)
+        return "NO_SIGNAL", max(up, down), reasons + [f"Next {target.value} prediction edge is too small"], Decimal("0")
+    return ("CALL", up, reasons, confidence) if up > down else ("PUT", down, reasons, confidence)
 
 
-def _no_signal(reason: str, next_direction: str | None = None, score: int = 0) -> SignalScore:
-    return SignalScore("NO_SIGNAL", score, Decimal(0), (reason,), next_direction)
+def _no_signal(
+    reason: str,
+    next_direction: str | None = None,
+    score: int = 0,
+    prediction_confidence: Decimal = Decimal("0"),
+) -> SignalScore:
+    return SignalScore("NO_SIGNAL", score, Decimal(0), (reason,), next_direction, prediction_confidence)
 
 
 def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1) -> SignalScore:
@@ -109,7 +129,7 @@ def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1)
         return _no_signal("Missing M1/M5/M15 analysis")
 
     target = target_timeframe
-    predicted_direction, prediction_score, prediction_reasons = _next_candle_prediction(analysis, target)
+    predicted_direction, prediction_score, prediction_reasons, prediction_confidence = _next_candle_prediction(analysis, target)
     visible_prediction = None if predicted_direction == "NO_SIGNAL" else predicted_direction
 
     context = analysis.analyses[Timeframe.M15]
@@ -122,18 +142,18 @@ def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1)
     entry = analysis.analyses[target]
 
     if target != Timeframe.M15 and (context.trend not in {"bullish", "bearish"} or confirmation.trend not in {"bullish", "bearish"}):
-        return _no_signal(f"MTF confirmation is incomplete for {target.value}", visible_prediction, prediction_score)
+        return _no_signal(f"MTF confirmation is incomplete for {target.value}", visible_prediction, prediction_score, prediction_confidence)
     if target != Timeframe.M15 and context.trend != confirmation.trend:
-        return _no_signal(f"M15/{confirmation.timeframe.value} trend confirmation conflicts", visible_prediction, prediction_score)
+        return _no_signal(f"M15/{confirmation.timeframe.value} trend confirmation conflicts", visible_prediction, prediction_score, prediction_confidence)
     if context.score < MIN_M15_TREND_SCORE:
-        return _no_signal("M15 context is not strong enough", visible_prediction, prediction_score)
+        return _no_signal("M15 context is not strong enough", visible_prediction, prediction_score, prediction_confidence)
     if target != Timeframe.M15:
         minimum_confirmation = MIN_M5_TREND_SCORE if confirmation.timeframe == Timeframe.M5 else MIN_M1_TREND_SCORE
         if confirmation.score < minimum_confirmation:
-            return _no_signal(f"{confirmation.timeframe.value} confirmation is not strong enough", visible_prediction, prediction_score)
+            return _no_signal(f"{confirmation.timeframe.value} confirmation is not strong enough", visible_prediction, prediction_score, prediction_confidence)
 
     if predicted_direction == "NO_SIGNAL":
-        return _no_signal(" | ".join(prediction_reasons), None, 0)
+        return _no_signal(" | ".join(prediction_reasons), None, 0, Decimal("0"))
     direction = predicted_direction
 
     points = prediction_score + context.score
@@ -150,7 +170,7 @@ def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1)
     minimum_entry_score = MIN_M1_TREND_SCORE if target == Timeframe.M1 else MIN_M5_TREND_SCORE
     if entry.trend == context.trend:
         if entry.score < minimum_entry_score:
-            return _no_signal(f"{target.value} trend evidence is too weak", direction, prediction_score)
+            return _no_signal(f"{target.value} trend evidence is too weak", direction, prediction_score, prediction_confidence)
         points += 2
         reasons.append(f"{target.value} trend agrees with context")
     elif entry.trend == "neutral":
@@ -165,9 +185,9 @@ def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1)
 
     if indicators.rsi is not None:
         if direction == "CALL" and indicators.rsi >= RSI_LONG_MAX:
-            return _no_signal(f"RSI is too extended for UP on {target.value}", direction, prediction_score)
+            return _no_signal(f"RSI is too extended for UP on {target.value}", direction, prediction_score, prediction_confidence)
         if direction == "PUT" and indicators.rsi <= RSI_SHORT_MIN:
-            return _no_signal(f"RSI is too extended for DOWN on {target.value}", direction, prediction_score)
+            return _no_signal(f"RSI is too extended for DOWN on {target.value}", direction, prediction_score, prediction_confidence)
         if (direction == "CALL" and indicators.rsi >= RSI_LONG_CONFIRM) or (direction == "PUT" and indicators.rsi <= RSI_SHORT_CONFIRM):
             points += 1
             reasons.append("RSI supports direction")
@@ -187,19 +207,19 @@ def score_mtf(analysis: MTFAnalysis, target_timeframe: Timeframe = Timeframe.M1)
     fresh_momentum = previous is not None and current.body_ratio >= MIN_TRIGGER_BODY_RATIO and ((direction == "CALL" and current.bullish and not previous.bullish) or (direction == "PUT" and current.bearish and previous.bullish))
 
     if not pattern_agrees and not fresh_momentum and not candle_agrees:
-        return _no_signal(f"{target.value} has no fresh directional trigger", direction, prediction_score)
+        return _no_signal(f"{target.value} has no fresh directional trigger", direction, prediction_score, prediction_confidence)
 
     points += 2 if pattern_agrees else 1
     reasons.append(f"Fresh {target.value} price-action trigger")
 
     if _reject_near_opposing_level(entry, direction):
-        return _no_signal("Too close to opposing support/resistance", direction, prediction_score)
+        return _no_signal("Too close to opposing support/resistance", direction, prediction_score, prediction_confidence)
 
     points += 1
     reasons.append("Adequate room from opposing level")
 
     if points < MIN_ALIGNMENT_SCORE:
-        return _no_signal("Signal score below live threshold", direction, points)
+        return _no_signal("Signal score below live threshold", direction, points, prediction_confidence)
 
     confidence = min(Decimal(90), Decimal(75) + Decimal(max(0, points - MIN_ALIGNMENT_SCORE) * 2))
-    return SignalScore(direction, points, confidence, tuple(reasons), direction)
+    return SignalScore(direction, points, confidence, tuple(reasons), direction, prediction_confidence)

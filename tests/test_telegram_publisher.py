@@ -43,7 +43,9 @@ def test_format_signal_falls_back_to_legacy_direction_when_prediction_missing():
 def test_format_prediction_is_distinct_from_actionable_signal():
     text = TelegramPublisher.format_prediction(make_signal("PUT", "PUT"), "confidence_below_threshold")
 
-    assert "🔮 NEXT M1 PREDICTION" in text
+    assert "🔮 NEXT CANDLE PREDICTION" in text
+    assert "PAIR: EURUSD" in text
+    assert "TIMEFRAME: M1" in text
     assert "DIRECTION: DOWN ↓" in text
     assert "STATUS: RESEARCH PREDICTION — NOT ACTIONABLE" in text
     assert "ACTION GATE: confidence_below_threshold" in text

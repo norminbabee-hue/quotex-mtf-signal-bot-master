@@ -58,15 +58,19 @@ function renderSignal(signal) {
   if (!signal) {
     text('signalState', 'WAITING');
     text('signalDirection', '—');
-    text('signalConfidence', '—');
+    text('signalTarget', '—');
+    text('signalPredictionConfidence', '—');
+    text('signalActionableConfidence', '—');
     text('signalExpiry', '—');
     text('sourceCandle', '—');
-    text('signalNote', 'A signal will appear only after the source candle is confirmed closed.');
+    text('signalNote', 'A prediction will appear only after the target candle is confirmed closed.');
     return;
   }
   text('signalState', signal.direction && signal.direction !== 'NONE' ? 'READY' : 'WAITING');
   text('signalDirection', signal.direction ?? '—');
-  text('signalConfidence', signal.confidence == null ? '—' : `${Number(signal.confidence).toFixed(1)}%`);
+  text('signalTarget', signal.target_timeframe ? `Next ${signal.target_timeframe}` : 'Next M1');
+  text('signalPredictionConfidence', signal.prediction_confidence == null ? '—' : `${Number(signal.prediction_confidence).toFixed(1)}%`);
+  text('signalActionableConfidence', signal.actionable_confidence == null ? '—' : `${Number(signal.actionable_confidence).toFixed(1)}%`);
   text('signalExpiry', signal.expiry_minutes == null ? '—' : `${signal.expiry_minutes} min`);
   text('sourceCandle', signal.source_candle_time ?? '—');
   text('signalNote', signal.note ?? 'Prediction is based on confirmed M1/M5/M15 candle data.');
@@ -111,8 +115,6 @@ async function loadResults() {
     text('lastUpdated', 'Waiting for data');
   }
 
-  // Optional live snapshot. The dashboard remains usable when the live endpoint
-  // is not running, which keeps the static/backtest workflow backward compatible.
   try {
     const liveResponse = await fetch(`../data/live.json?pair=${encodeURIComponent(pair)}&timeframe=${timeframe}`, { cache: 'no-store' });
     if (!liveResponse.ok) throw new Error(`HTTP ${liveResponse.status}`);

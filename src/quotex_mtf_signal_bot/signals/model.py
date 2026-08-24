@@ -20,6 +20,9 @@ class Signal:
     # Explicit prediction target: the direction of the NEXT closed M1 candle.
     # CALL = UP, PUT = DOWN. Kept optional for backward-compatible test stubs.
     next_candle_direction: str | None = None
+    # Forecast strength is separate from the stricter actionable confidence.
+    # It is a directional score, not a calibrated probability of winning.
+    prediction_confidence: Decimal = Decimal("0")
 
 
 def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -> Signal | None:
@@ -44,4 +47,5 @@ def build_signal(symbol: str, entry_time_utc: datetime, analysis: MTFAnalysis) -
         score=score.score,
         reasons=score.reasons + ("Target: next M1 candle direction",),
         next_candle_direction=score.next_candle_direction or direction,
+        prediction_confidence=score.prediction_confidence,
     )

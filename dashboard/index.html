@@ -32,11 +32,13 @@
         <div class="section-head"><h2>Next-candle signal</h2><span class="badge" id="signalState">WAITING</span></div>
         <div class="signal-direction" id="signalDirection">—</div>
         <div class="signal-meta">
-          <div><span>Confidence</span><strong id="signalConfidence">—</strong></div>
+          <div><span>Target</span><strong id="signalTarget">—</strong></div>
+          <div><span>Prediction</span><strong id="signalPredictionConfidence">—</strong></div>
+          <div><span>Actionable</span><strong id="signalActionableConfidence">—</strong></div>
           <div><span>Expiry</span><strong id="signalExpiry">—</strong></div>
           <div><span>Source candle</span><strong id="sourceCandle">—</strong></div>
         </div>
-        <p class="muted small" id="signalNote">A signal will appear only after the source candle is confirmed closed.</p>
+        <p class="muted small" id="signalNote">A prediction will appear only after the target candle is confirmed closed.</p>
       </article>
 
       <article class="panel clock-card">

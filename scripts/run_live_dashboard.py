@@ -65,11 +65,13 @@ def write_snapshot(pair: str, manager: LiveCandleManager, signal, last_tick, off
         prediction_confidence = getattr(signal, "prediction_confidence", signal.confidence)
         signal_payload = {
             "direction": signal.next_candle_direction or signal.direction,
+            "target_timeframe": getattr(signal, "target_timeframe", "M1"),
             "confidence": float(prediction_confidence),
+            "prediction_confidence": float(prediction_confidence),
             "actionable_confidence": float(signal.confidence),
-            "expiry_minutes": 1,
+            "expiry_minutes": getattr(signal, "target_timeframe", "M1") and {"M1": 1, "M5": 5, "M15": 15}.get(getattr(signal, "target_timeframe", "M1"), 1),
             "source_candle_time": iso(signal.entry_time_utc),
-            "note": "Prediction generated only after a confirmed M1 candle close; confidence is directional forecast strength, not a calibrated win probability.",
+            "note": "Prediction is generated after a confirmed candle close; confidence is directional forecast strength, not a calibrated win probability.",
         }
 
     snapshot = {
@@ -132,12 +134,13 @@ def main() -> None:
                     last_tick = tick
                     events = manager.on_tick(tick)
                     for event in events:
-                        closed_signal = service.on_closed_candle(event.candle)
-                        if closed_signal is not None:
+                        closed_signals = service.on_closed_candle(event.candle)
+                        for closed_signal in closed_signals:
                             signal = closed_signal
                             LOG.info(
-                                "NEW SIGNAL %s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
+                                "NEW SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
                                 signal.next_candle_direction or signal.direction,
+                                getattr(signal, "target_timeframe", "M1"),
                                 float(getattr(signal, "prediction_confidence", signal.confidence)),
                                 float(signal.confidence),
                                 iso(signal.entry_time_utc),

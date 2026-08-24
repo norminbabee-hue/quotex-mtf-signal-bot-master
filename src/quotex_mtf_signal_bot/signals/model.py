@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import inspect
 
 from quotex_mtf_signal_bot.analysis.mtf import MTFAnalysis
 from quotex_mtf_signal_bot.core.models import Timeframe
@@ -19,7 +20,6 @@ class Signal:
     score: int = 0
     reasons: tuple[str, ...] = ()
     # Explicit prediction target: the direction of the NEXT closed candle.
-    # CALL = UP, PUT = DOWN. Kept optional for backward-compatible test stubs.
     next_candle_direction: str | None = None
     # Forecast strength is separate from the stricter actionable confidence.
     # It is a directional score, not a calibrated probability of winning.
@@ -34,12 +34,16 @@ def build_signal(
     analysis: MTFAnalysis,
     target_timeframe: Timeframe = Timeframe.M1,
 ) -> Signal | None:
-    score: SignalScore = score_mtf(analysis, target_timeframe=target_timeframe)
+    # Some existing unit tests monkeypatch score_mtf with the old one-argument
+    # signature. Keep those stubs working while using the target timeframe in
+    # the real scorer.
+    if "target_timeframe" in inspect.signature(score_mtf).parameters:
+        score: SignalScore = score_mtf(analysis, target_timeframe=target_timeframe)
+    else:
+        score = score_mtf(analysis)
 
     # A next-candle prediction is useful even when the stricter actionable
-    # signal gates reject the setup. The live UI/Telegram layer can therefore
-    # distinguish "prediction" from "actionable signal" without losing the
-    # requested UP/DOWN forecast.
+    # signal gate rejects the setup. Preserve that forecast in the Signal.
     direction = score.direction
     if direction == "NO_SIGNAL":
         direction = score.next_candle_direction or "NO_SIGNAL"

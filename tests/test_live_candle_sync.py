@@ -47,11 +47,21 @@ def test_one_tick_stream_closes_m1_m5_and_m15_at_boundaries():
 
 def test_shared_boundary_emits_m15_then_m5_then_m1():
     manager = LiveCandleManager(FakeAdapter(), "EURUSD")
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     closed = []
-    for second in range(0, 15 * 60 + 1, 30):
-        closed.extend(manager.on_tick(tick(second)))
+    for elapsed in range(0, 15 * 60 + 1, 30):
+        ts = base + timedelta(seconds=elapsed)
+        closed.extend(
+            manager.on_tick(
+                Tick("EURUSD", ts, Decimal("1.10000"), Decimal("1.10002"))
+            )
+        )
 
-    # At 00:05, both M5 and M1 close; at 00:15, M15/M5/M1 all close.
-    at_15 = [event.candle.timeframe_seconds for event in closed
-             if event.candle.close_time_utc == datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)]
+    # At 00:15, M15/M5/M1 all close on the same boundary.
+    at_15 = [
+        event.candle.timeframe_seconds
+        for event in closed
+        if event.candle.close_time_utc
+        == datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)
+    ]
     assert at_15 == [900, 300, 60]

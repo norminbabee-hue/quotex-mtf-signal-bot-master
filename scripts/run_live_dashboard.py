@@ -16,8 +16,30 @@ from quotex_mtf_signal_bot.telegram.publisher import TelegramConfig, TelegramPub
 LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "live.json"
+ENV_FILE = ROOT / ".env"
 STALE_FEED_SECONDS = float(os.getenv("MT5_MAX_TICK_AGE_SECONDS", "30"))
 TIMEFRAMES = ("M1", "M5", "M15")
+
+
+def load_local_env() -> None:
+    """Load simple KEY=VALUE settings from the local, git-ignored .env file."""
+    if not ENV_FILE.exists():
+        return
+    try:
+        for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError as exc:
+        LOG.warning("Could not read local .env file: %s", exc)
+
+
+load_local_env()
 
 
 def iso(value):
@@ -80,25 +102,12 @@ def signal_payload(signal):
     }
 
 
-def write_snapshot(
-    pair: str,
-    manager: LiveCandleManager,
-    latest_signals: dict[str, object],
-    last_tick,
-    offset: int,
-):
+def write_snapshot(pair: str, manager: LiveCandleManager, latest_signals: dict[str, object], last_tick, offset: int):
     now = datetime.now(timezone.utc)
     status = feed_status(last_tick, now)
-    candles = {
-        label: candle_payload(manager.builders[label].current, now)
-        for label in TIMEFRAMES
-    }
-    predictions = {
-        label: signal_payload(latest_signals.get(label))
-        for label in TIMEFRAMES
-    }
+    candles = {label: candle_payload(manager.builders[label].current, now) for label in TIMEFRAMES}
+    predictions = {label: signal_payload(latest_signals.get(label)) for label in TIMEFRAMES}
     primary = predictions.get("M1") or predictions.get("M5") or predictions.get("M15")
-
     snapshot = {
         "status": "LIVE" if status == "ONLINE" else "WAITING",
         "marketState": status,
@@ -127,47 +136,28 @@ def write_snapshot(
 
 
 def telegram_publisher_from_env() -> TelegramPublisher | None:
-    """Create the Telegram publisher only when both secrets are configured.
-
-    Required environment variables:
-      TELEGRAM_BOT_TOKEN
-      TELEGRAM_CHAT_ID
-
-    Optional:
-      TELEGRAM_SEND_PREDICTIONS=true  -> also send non-actionable predictions.
-    """
+    """Create Telegram publisher from the local .env file when configured."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
-        LOG.info("Telegram publisher disabled: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured")
+        LOG.info("Telegram publisher disabled: edit .env and set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID")
         return None
     return TelegramPublisher(TelegramConfig(bot_token=token, chat_id=chat_id))
 
 
 def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
-    """Publish actionable signals; optionally publish research-only predictions."""
     if publisher is None or signal is None:
         return
-
     actionable = float(signal.confidence) > 0
     if actionable:
         publisher.publish(signal)
-        LOG.info(
-            "TELEGRAM SENT actionable signal direction=%s target=%s",
-            signal.next_candle_direction or signal.direction,
-            getattr(signal, "target_timeframe", "M1"),
-        )
+        LOG.info("TELEGRAM SENT actionable signal direction=%s target=%s", signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
         return
-
     if os.getenv("TELEGRAM_SEND_PREDICTIONS", "false").strip().lower() in {"1", "true", "yes", "on"}:
         reasons = getattr(signal, "reasons", ())
         rejection_reason = reasons[-1] if reasons else "action gate rejected"
         publisher.publish_prediction(signal, rejection_reason)
-        LOG.info(
-            "TELEGRAM SENT research prediction direction=%s target=%s",
-            signal.next_candle_direction or signal.direction,
-            getattr(signal, "target_timeframe", "M1"),
-        )
+        LOG.info("TELEGRAM SENT research prediction direction=%s target=%s", signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
 
 
 def main() -> None:
@@ -176,7 +166,6 @@ def main() -> None:
     poll = float(os.getenv("MT5_POLL_SECONDS", "0.25"))
     history_count = max(60, int(os.getenv("MT5_HISTORY_COUNT", "200")))
     path = os.getenv("MT5_PATH") or None
-
     adapter = MT5Adapter(path=path)
     try:
         registry = SymbolRegistry.from_mt5(adapter, candidates=(pair,))
@@ -187,14 +176,12 @@ def main() -> None:
         service = LiveMTFSignalService(pair)
         telegram = telegram_publisher_from_env()
         service.seed_history(manager.seed_history(history_count))
-
         last_tick = adapter.latest_tick(broker_symbol)
         manager.on_tick(last_tick)
         latest_signals: dict[str, object] = {}
         cycle = 0
         last_report = 0.0
         LOG.info("Live dashboard started for %s (%s), Quotex offset %+d sec", pair, broker_symbol, offset)
-
         while True:
             try:
                 tick = adapter.latest_tick(broker_symbol)
@@ -213,46 +200,21 @@ def main() -> None:
                             actionable_confidence = float(closed_signal.confidence)
                             gate_reason = closed_signal.reasons[-1] if getattr(closed_signal, "reasons", ()) else "unknown"
                             if actionable_confidence > 0:
-                                LOG.info(
-                                    "ACTIONABLE SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s",
-                                    closed_signal.next_candle_direction or closed_signal.direction,
-                                    target,
-                                    prediction_confidence,
-                                    actionable_confidence,
-                                    iso(closed_signal.entry_time_utc),
-                                )
+                                LOG.info("ACTIONABLE SIGNAL %s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%% source=%s", closed_signal.next_candle_direction or closed_signal.direction, target, prediction_confidence, actionable_confidence, iso(closed_signal.entry_time_utc))
                             else:
-                                LOG.info(
-                                    "NEW PREDICTION %s target=%s prediction_confidence=%.1f%% ACTIONABLE=NO gate=%s source=%s",
-                                    closed_signal.next_candle_direction or closed_signal.direction,
-                                    target,
-                                    prediction_confidence,
-                                    gate_reason,
-                                    iso(closed_signal.entry_time_utc),
-                                )
+                                LOG.info("NEW PREDICTION %s target=%s prediction_confidence=%.1f%% ACTIONABLE=NO gate=%s source=%s", closed_signal.next_candle_direction or closed_signal.direction, target, prediction_confidence, gate_reason, iso(closed_signal.entry_time_utc))
                             try:
                                 publish_live_signal(telegram, closed_signal)
                             except Exception:
                                 LOG.exception("Telegram publish failed; continuing live dashboard")
                 else:
                     LOG.info("No fresh MT5 tick (%.2fs old); treating feed as closed/stale", age)
-
                 write_snapshot(pair, manager, latest_signals, last_tick, offset)
-
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
                     status = feed_status(last_tick, now)
                     current = manager.builders["M1"].current
-                    LOG.info(
-                        "LIVE heartbeat cycle=%d status=%s tick_age=%.2fs bid=%s M1=%s M5=%s M15=%s",
-                        cycle,
-                        status,
-                        age,
-                        tick.bid,
-                        iso(current.open_time_utc) if current else "WAITING",
-                        iso(manager.builders["M5"].current.open_time_utc) if manager.builders["M5"].current else "WAITING",
-                        iso(manager.builders["M15"].current.open_time_utc) if manager.builders["M15"].current else "WAITING",
-                    )
+                    LOG.info("LIVE heartbeat cycle=%d status=%s tick_age=%.2fs bid=%s M1=%s M5=%s M15=%s", cycle, status, age, tick.bid, iso(current.open_time_utc) if current else "WAITING", iso(manager.builders["M5"].current.open_time_utc) if manager.builders["M5"].current else "WAITING", iso(manager.builders["M15"].current.open_time_utc) if manager.builders["M15"].current else "WAITING")
                     last_report = now_mono
                 time.sleep(poll)
             except KeyboardInterrupt:

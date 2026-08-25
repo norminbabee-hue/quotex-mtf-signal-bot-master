@@ -60,9 +60,30 @@ class MultiPairScanner:
         return dict(self._broker_symbols)
 
     def warm_up(self, history_count: int = 200) -> None:
-        for symbol, manager in self.managers.items():
-            history = manager.seed_history(history_count)
-            self.services[symbol].seed_history(history)
+        """Seed every matched pair; disable only pairs whose MT5 history is unusable."""
+        valid: list[str] = []
+        failed: list[tuple[str, str]] = []
+        for symbol, manager in list(self.managers.items()):
+            try:
+                history = manager.seed_history(history_count)
+                self.services[symbol].seed_history(history)
+                valid.append(symbol)
+            except Exception as exc:
+                failed.append((symbol, str(exc)))
+
+        if failed:
+            for symbol, reason in failed:
+                print(f"Skipping {symbol}: {reason}")
+
+        if not valid:
+            raise RuntimeError("No configured Quotex pair has enough MT5 M1/M5/M15 history")
+
+        if len(valid) != len(self.registry.symbols):
+            broker_pairs = tuple((symbol, self._broker_symbols[symbol]) for symbol in valid)
+            self.registry = SymbolRegistry(tuple(valid), broker_pairs)
+            self._broker_symbols = dict(broker_pairs)
+            self.managers = {symbol: self.managers[symbol] for symbol in valid}
+            self.services = {symbol: self.services[symbol] for symbol in valid}
 
     def on_tick(self, tick: Tick) -> None:
         canonical = SymbolRegistry.canonical_symbol(tick.symbol)
@@ -77,8 +98,6 @@ class MultiPairScanner:
             return
 
         events = manager.on_tick(tick)
-        # At a shared boundary, update M15 and M5 before M1 so the M1
-        # prediction sees all three candles that just closed.
         events.sort(key=lambda event: self._TIMEFRAME_PRIORITY[event.candle.timeframe_seconds])
         for event in events:
             signals = service.on_closed_candle(event.candle)

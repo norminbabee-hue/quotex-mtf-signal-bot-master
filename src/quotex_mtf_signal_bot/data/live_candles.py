@@ -15,10 +15,8 @@ class CandleCloseEvent:
 class LiveCandleManager:
     """Maintain synchronized M1/M5/M15 candles from one MT5 tick stream."""
 
-    # Close higher timeframes first. When an M1 boundary coincides with M5/M15,
-    # the signal service must already have the newly closed higher-TF candles
-    # before it analyzes the just-closed M1 candle.
     TIMEFRAMES = {"M15": 900, "M5": 300, "M1": 60}
+    MIN_HISTORY_BARS = 60
 
     def __init__(
         self,
@@ -50,13 +48,20 @@ class LiveCandleManager:
         return closed
 
     def seed_history(self, count: int = 100) -> dict[str, list[MT5Bar]]:
-        """Load recent MT5 history; the signal service removes forming bars."""
+        """Load recent MT5 history, accepting shorter feeds when they still meet the live minimum.
+
+        Some broker symbols do not return the requested number of bars even though
+        they have enough history for the MTF model. The model needs 60 completed
+        candles per timeframe, so a response such as 114 M1 bars is usable and
+        should not abort the entire multi-pair scanner.
+        """
         history: dict[str, list[MT5Bar]] = {}
+        request_count = max(self.MIN_HISTORY_BARS, int(count))
         for timeframe in ("M1", "M5", "M15"):
-            bars = self.adapter.bars(self.symbol, timeframe, count)
-            if len(bars) < count:
+            bars = self.adapter.bars(self.symbol, timeframe, request_count)
+            if len(bars) < self.MIN_HISTORY_BARS:
                 raise RuntimeError(
-                    f"Insufficient MT5 {timeframe} history: expected {count}, got {len(bars)}"
+                    f"Insufficient MT5 {timeframe} history: minimum {self.MIN_HISTORY_BARS}, got {len(bars)}"
                 )
             history[timeframe] = bars
         return history

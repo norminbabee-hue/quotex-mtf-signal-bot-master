@@ -68,6 +68,29 @@ class LiveMTFSignalService:
             for bar in completed:
                 self.history[timeframe].append(self._history_bar_to_candle(bar))
 
+    def preview_next_signal(self, target_timeframe: Timeframe, entry_time_utc: datetime) -> Signal | None:
+        """Predict the next target candle before it opens.
+
+        This deliberately uses only completed candles already in history.  It
+        allows the dashboard to prepare a single actionable signal 30-60
+        seconds before the target candle opens instead of waiting for that
+        candle boundary and then sending a late entry.
+        """
+        if any(len(self.history[tf]) < 60 for tf in (Timeframe.M1, Timeframe.M5, Timeframe.M15)):
+            return None
+        snapshot = {
+            tf: list(self.history[tf])
+            for tf in (Timeframe.M1, Timeframe.M5, Timeframe.M15)
+        }
+        analysis = analyze_mtf(snapshot)
+        entry_time = entry_time_utc.astimezone(timezone.utc)
+        return build_signal(
+            self.symbol,
+            entry_time,
+            analysis,
+            target_timeframe=target_timeframe,
+        )
+
     def on_closed_candle(self, live: LiveCandle) -> list[Signal]:
         """Return predictions for every requested timeframe whose boundary just closed.
 

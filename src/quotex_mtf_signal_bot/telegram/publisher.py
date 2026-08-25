@@ -80,14 +80,30 @@ class TelegramPublisher:
             lines.append(f"ACTION GATE: {rejection_reason}")
         return "\n".join(lines)
 
+    def _url(self, method: str) -> str:
+        return f"https://api.telegram.org/bot{self.config.bot_token}/{method}"
+
+    def verify_connection(self) -> str:
+        """Verify the bot token with Telegram and return the bot username."""
+        req = request.Request(self._url("getMe"), method="GET")
+        try:
+            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f"Telegram API returned HTTP {response.status}")
+                body = json.loads(response.read().decode("utf-8"))
+        except error.URLError as exc:
+            raise RuntimeError(f"Telegram connection failed: {exc}") from exc
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram API rejected bot token: {body.get('description', 'unknown error')}")
+        return str(body.get("result", {}).get("username", "unknown"))
+
     def _send(self, text: str) -> None:
         payload = json.dumps({
             "chat_id": self.config.chat_id,
             "text": text,
         }).encode("utf-8")
-        url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
         req = request.Request(
-            url,
+            self._url("sendMessage"),
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -96,6 +112,9 @@ class TelegramPublisher:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f"Telegram API returned HTTP {response.status}")
+                body = json.loads(response.read().decode("utf-8"))
+                if not body.get("ok"):
+                    raise RuntimeError(f"Telegram API rejected message: {body.get('description', 'unknown error')}")
         except error.URLError as exc:
             raise RuntimeError(f"Telegram publish failed: {exc}") from exc
 

@@ -7,9 +7,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from quotex_mtf_signal_bot.config.quotex_pairs import QUOTEX_PAIRS
 from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
 from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter, Tick
-from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 from quotex_mtf_signal_bot.live.multi_pair_scanner import MultiPairScanner
 from quotex_mtf_signal_bot.telegram.publisher import TelegramConfig, TelegramPublisher
 
@@ -102,12 +102,7 @@ def signal_payload(signal):
     }
 
 
-def write_snapshot(
-    scanner: MultiPairScanner,
-    latest_signals: dict[str, dict[str, object]],
-    last_ticks: dict[str, Tick],
-    offset: int,
-):
+def write_snapshot(scanner: MultiPairScanner, latest_signals: dict[str, dict[str, object]], last_ticks: dict[str, Tick], offset: int):
     now = datetime.now(timezone.utc)
     pairs = {}
     for pair in scanner.registry.symbols:
@@ -135,7 +130,6 @@ def write_snapshot(
         "quotexServerOffsetSeconds": offset,
         "pairCount": len(pairs),
         "pairs": pairs,
-        # Backward-compatible single-pair fields for the existing dashboard UI.
         "pair": scanner.registry.symbols[0] if scanner.registry.symbols else None,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +146,6 @@ def write_snapshot(
 
 
 def telegram_publisher_from_env() -> TelegramPublisher | None:
-    """Create Telegram publisher from the local .env file when configured."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -167,23 +160,13 @@ def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
     actionable = float(signal.confidence) > 0
     if actionable:
         publisher.publish(signal)
-        LOG.info(
-            "TELEGRAM SENT pair=%s direction=%s target=%s",
-            signal.symbol,
-            signal.next_candle_direction or signal.direction,
-            getattr(signal, "target_timeframe", "M1"),
-        )
+        LOG.info("TELEGRAM SENT pair=%s direction=%s target=%s", signal.symbol, signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
         return
     if os.getenv("TELEGRAM_SEND_PREDICTIONS", "false").strip().lower() in {"1", "true", "yes", "on"}:
         reasons = getattr(signal, "reasons", ())
         rejection_reason = reasons[-1] if reasons else "action gate rejected"
         publisher.publish_prediction(signal, rejection_reason)
-        LOG.info(
-            "TELEGRAM SENT prediction pair=%s direction=%s target=%s",
-            signal.symbol,
-            signal.next_candle_direction or signal.direction,
-            getattr(signal, "target_timeframe", "M1"),
-        )
+        LOG.info("TELEGRAM SENT prediction pair=%s direction=%s target=%s", signal.symbol, signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
 
 
 def main() -> None:
@@ -191,11 +174,16 @@ def main() -> None:
     poll = float(os.getenv("MT5_POLL_SECONDS", "0.25"))
     history_count = max(60, int(os.getenv("MT5_HISTORY_COUNT", "200")))
     path = os.getenv("MT5_PATH") or None
-    pair_filter = tuple(
+
+    # Quotex is the source of truth for the trading universe. MT5 is only the
+    # candle/tick feed, so an empty MT5_SYMBOLS now means the fixed Quotex list,
+    # not every FX instrument visible in MT5.
+    configured_symbols = tuple(
         item.strip().upper()
         for item in os.getenv("MT5_SYMBOLS", "").split(",")
         if item.strip()
-    ) or None
+    )
+    pair_filter = configured_symbols or QUOTEX_PAIRS
 
     adapter = MT5Adapter(path=path)
     try:
@@ -208,30 +196,21 @@ def main() -> None:
             latest_signals.setdefault(signal.symbol, {})[target] = signal
             LOG.info(
                 "NEW SIGNAL pair=%s direction=%s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%%",
-                signal.symbol,
-                signal.next_candle_direction or signal.direction,
-                target,
-                float(getattr(signal, "prediction_confidence", signal.confidence)),
-                float(signal.confidence),
+                signal.symbol, signal.next_candle_direction or signal.direction, target,
+                float(getattr(signal, "prediction_confidence", signal.confidence)), float(signal.confidence),
             )
             try:
                 publish_live_signal(telegram, signal)
             except Exception:
                 LOG.exception("Telegram publish failed; continuing multi-pair scanner")
 
-        scanner = MultiPairScanner(
-            adapter,
-            on_signal,
-            server_offset_seconds=offset,
-            candidates=pair_filter,
-        )
+        scanner = MultiPairScanner(adapter, on_signal, server_offset_seconds=offset, candidates=pair_filter)
         if not scanner.registry.symbols:
-            raise RuntimeError("No FX currency pairs were discovered in the connected MT5 terminal")
+            raise RuntimeError("None of the configured Quotex pairs are available in the connected MT5 terminal")
 
-        LOG.info("Discovered %d FX pairs: %s", len(scanner.registry.symbols), ", ".join(scanner.registry.symbols))
+        LOG.info("Quotex whitelist: %d pairs requested; %d matched in MT5: %s", len(pair_filter), len(scanner.registry.symbols), ", ".join(scanner.registry.symbols))
         scanner.warm_up(history_count)
 
-        # Seed each pair with its current tick before entering the live loop.
         for pair in scanner.registry.symbols:
             broker_symbol = scanner.broker_symbol(pair)
             try:
@@ -243,7 +222,7 @@ def main() -> None:
 
         cycle = 0
         last_report = 0.0
-        LOG.info("Live multi-pair dashboard started: %d FX pairs, Quotex offset %+d sec", len(scanner.registry.symbols), offset)
+        LOG.info("Live Quotex multi-pair dashboard started: %d matched pairs, Quotex offset %+d sec", len(scanner.registry.symbols), offset)
 
         while True:
             try:
@@ -255,7 +234,6 @@ def main() -> None:
                     except Exception:
                         LOG.exception("MT5 tick read failed for pair=%s", pair)
                         continue
-
                     now = datetime.now(timezone.utc)
                     age = (now - tick.timestamp_utc).total_seconds()
                     if age <= STALE_FEED_SECONDS:
@@ -266,7 +244,7 @@ def main() -> None:
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
                     online = sum(feed_status(last_ticks.get(pair), datetime.now(timezone.utc)) == "ONLINE" for pair in scanner.registry.symbols)
-                    LOG.info("LIVE heartbeat cycle=%d pairs=%d online=%d", cycle, len(scanner.registry.symbols), online)
+                    LOG.info("LIVE heartbeat cycle=%d quotex_pairs=%d online=%d", cycle, len(scanner.registry.symbols), online)
                     last_report = now_mono
                 time.sleep(poll)
             except KeyboardInterrupt:

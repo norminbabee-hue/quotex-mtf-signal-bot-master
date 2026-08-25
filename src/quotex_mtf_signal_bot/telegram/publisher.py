@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib import error, request
 
@@ -17,7 +18,7 @@ class TelegramConfig:
 
 
 class TelegramPublisher:
-    """Minimal Telegram Bot API publisher for next-candle research signals."""
+    """Telegram publisher for pre-entry next-candle actionable signals."""
 
     def __init__(self, config: TelegramConfig) -> None:
         if not config.bot_token or not config.chat_id:
@@ -26,7 +27,6 @@ class TelegramPublisher:
 
     @staticmethod
     def _pair_label(symbol: str) -> str:
-        """Display a six-letter FX symbol as the familiar BASE/QUOTE form."""
         compact = symbol.replace("/", "").upper()
         if len(compact) == 6 and compact.isalpha():
             return f"{compact[:3]}/{compact[3:]}"
@@ -39,7 +39,7 @@ class TelegramPublisher:
 
     @staticmethod
     def _target_times(signal: Signal) -> tuple[str, str]:
-        target_open = signal.entry_time_utc
+        target_open = signal.entry_time_utc.astimezone(timezone.utc)
         minutes = {"M1": 1, "M5": 5, "M15": 15}.get(signal.target_timeframe, 1)
         target_close = target_open + timedelta(minutes=minutes)
         return target_open.isoformat(), target_close.isoformat()
@@ -49,17 +49,23 @@ class TelegramPublisher:
         confidence = Decimal(str(signal.confidence)).quantize(Decimal("0.01"))
         target_open, target_close = TelegramPublisher._target_times(signal)
         target = signal.target_timeframe
+        now = datetime.now(timezone.utc)
+        entry_seconds = max(0, int((signal.entry_time_utc.astimezone(timezone.utc) - now).total_seconds()))
+        offset = int(os.getenv("QUOTEX_SERVER_OFFSET_SECONDS", "21600"))
+        quotex_entry = signal.entry_time_utc.astimezone(timezone(timedelta(seconds=offset)))
         return "\n".join([
-            "🔔 NEXT CANDLE SIGNAL",
+            "🔔 ACTIONABLE NEXT CANDLE SIGNAL",
             f"PAIR: {TelegramPublisher._pair_label(signal.symbol)}",
             f"TIMEFRAME: {target}",
             f"NEXT {target}: {TelegramPublisher._direction_label(signal)}",
-            f"TARGET: NEXT CLOSED {target} CANDLE",
+            "STATUS: ✅ ACTIONABLE",
+            f"ENTRY IN: {entry_seconds} SEC",
+            f"ENTRY QUOTEX TIME: {quotex_entry.strftime('%Y-%m-%d %H:%M:%S')}",
             f"TARGET OPEN UTC: {target_open}",
             f"TARGET CLOSE UTC: {target_close}",
             f"EXPIRY: {signal.expiry}",
             f"CONFIDENCE: {confidence}%",
-            f"ENTRY UTC: {signal.entry_time_utc.isoformat()}",
+            "⚠️ Enter only at the stated target candle open; ignore this signal if the entry time has passed.",
         ])
 
     @staticmethod
@@ -84,7 +90,6 @@ class TelegramPublisher:
         return f"https://api.telegram.org/bot{self.config.bot_token}/{method}"
 
     def verify_connection(self) -> str:
-        """Verify the bot token with Telegram and return the bot username."""
         req = request.Request(self._url("getMe"), method="GET")
         try:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
@@ -98,16 +103,8 @@ class TelegramPublisher:
         return str(body.get("result", {}).get("username", "unknown"))
 
     def _send(self, text: str) -> None:
-        payload = json.dumps({
-            "chat_id": self.config.chat_id,
-            "text": text,
-        }).encode("utf-8")
-        req = request.Request(
-            self._url("sendMessage"),
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        payload = json.dumps({"chat_id": self.config.chat_id, "text": text}).encode("utf-8")
+        req = request.Request(self._url("sendMessage"), data=payload, headers={"Content-Type": "application/json"}, method="POST")
         try:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 if response.status < 200 or response.status >= 300:

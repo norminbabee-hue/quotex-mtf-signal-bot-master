@@ -169,16 +169,42 @@ def telegram_publisher_from_env() -> TelegramPublisher | None:
 def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
     if publisher is None or signal is None:
         return
+
+    # Safety/default behavior: Telegram receives only signals that passed the
+    # stricter live action gate. Research predictions are kept out of the chat
+    # unless the user explicitly opts out of actionable-only mode.
     actionable = float(signal.confidence) > 0
     if actionable:
         publisher.publish(signal)
-        LOG.info("TELEGRAM SENT pair=%s direction=%s target=%s", signal.symbol, signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
+        LOG.info(
+            "TELEGRAM SENT pair=%s direction=%s target=%s confidence=%.1f%%",
+            signal.symbol,
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+            float(signal.confidence),
+        )
         return
+
+    actionable_only = os.getenv("TELEGRAM_ACTIONABLE_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if actionable_only:
+        LOG.info(
+            "TELEGRAM SKIP non-actionable pair=%s direction=%s target=%s",
+            signal.symbol,
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
+        return
+
     if os.getenv("TELEGRAM_SEND_PREDICTIONS", "false").strip().lower() in {"1", "true", "yes", "on"}:
         reasons = getattr(signal, "reasons", ())
         rejection_reason = reasons[-1] if reasons else "action gate rejected"
         publisher.publish_prediction(signal, rejection_reason)
-        LOG.info("TELEGRAM SENT prediction pair=%s direction=%s target=%s", signal.symbol, signal.next_candle_direction or signal.direction, getattr(signal, "target_timeframe", "M1"))
+        LOG.info(
+            "TELEGRAM SENT prediction pair=%s direction=%s target=%s",
+            signal.symbol,
+            signal.next_candle_direction or signal.direction,
+            getattr(signal, "target_timeframe", "M1"),
+        )
 
 
 def main() -> None:
@@ -205,8 +231,11 @@ def main() -> None:
             latest_signals.setdefault(signal.symbol, {})[target] = signal
             LOG.info(
                 "NEW SIGNAL pair=%s direction=%s target=%s prediction_confidence=%.1f%% actionable_confidence=%.1f%%",
-                signal.symbol, signal.next_candle_direction or signal.direction, target,
-                float(getattr(signal, "prediction_confidence", signal.confidence)), float(signal.confidence),
+                signal.symbol,
+                signal.next_candle_direction or signal.direction,
+                target,
+                float(getattr(signal, "prediction_confidence", signal.confidence)),
+                float(signal.confidence),
             )
             try:
                 publish_live_signal(telegram, signal)
@@ -217,7 +246,12 @@ def main() -> None:
         if not scanner.registry.symbols:
             raise RuntimeError("None of the configured Quotex pairs are available in the connected MT5 terminal")
 
-        LOG.info("Quotex whitelist: %d pairs requested; %d matched in MT5: %s", len(pair_filter), len(scanner.registry.symbols), ", ".join(scanner.registry.symbols))
+        LOG.info(
+            "Quotex whitelist: %d pairs requested; %d matched in MT5: %s",
+            len(pair_filter),
+            len(scanner.registry.symbols),
+            ", ".join(scanner.registry.symbols),
+        )
         scanner.warm_up(history_count)
 
         for pair in scanner.registry.symbols:
@@ -231,7 +265,11 @@ def main() -> None:
 
         cycle = 0
         last_report = 0.0
-        LOG.info("Live Quotex multi-pair dashboard started: %d matched pairs, Quotex offset %+d sec", len(scanner.registry.symbols), offset)
+        LOG.info(
+            "Live Quotex multi-pair dashboard started: %d matched pairs, Quotex offset %+d sec",
+            len(scanner.registry.symbols),
+            offset,
+        )
 
         while True:
             try:
@@ -252,8 +290,16 @@ def main() -> None:
                 write_snapshot(scanner, latest_signals, last_ticks, offset)
                 now_mono = time.monotonic()
                 if now_mono - last_report >= 5.0:
-                    online = sum(feed_status(last_ticks.get(pair), datetime.now(timezone.utc)) == "ONLINE" for pair in scanner.registry.symbols)
-                    LOG.info("LIVE heartbeat cycle=%d quotex_pairs=%d online=%d", cycle, len(scanner.registry.symbols), online)
+                    online = sum(
+                        feed_status(last_ticks.get(pair), datetime.now(timezone.utc)) == "ONLINE"
+                        for pair in scanner.registry.symbols
+                    )
+                    LOG.info(
+                        "LIVE heartbeat cycle=%d quotex_pairs=%d online=%d",
+                        cycle,
+                        len(scanner.registry.symbols),
+                        online,
+                    )
                     last_report = now_mono
                 time.sleep(poll)
             except KeyboardInterrupt:

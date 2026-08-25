@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+# Exact Quotex FX universe supplied by the user from the Quotex pair list.
+# Keep these as canonical six-letter FX symbols; the MT5 registry resolves
+# broker suffixes such as m, .a, or -OTC automatically.
+QUOTEX_PAIRS: tuple[str, ...] = (
+    "USDIDR",
+    "NZDCAD",
+    "USDARS",
+    "USDNGN",
+    "CADCHF",
+    "EURUSD",
+    "AUDJPY",
+    "USDEGP",
+    "USDCOP",
+    "USDPHP",
+    "GBPNZD",
+    "USDINR",
+    "EURGBP",
+    "GBPUSD",
+    "AUDUSD",
+    "USDBRL",
+    "CADJPY",
+    "EURCAD",
+    "GBPAUD",
+    "GBPJPY",
+    "USDCAD",
+    "USDJPY",
+    "EURAUD",
+    "GBPCAD",
+    "NZDJPY",
+    "NZDUSD",
+    "USDPKR",
+    "USDCHF",
+    "AUDCAD",
+    "AUDNZD",
+    "AUDCHF",
+    "USDMXN",
+    "CHFJPY",
+    "NZDBDT",
+    "NZDCHF",
+    "USDBDT",
+    "USD DZD".replace(" ", ""),
+    "EURCHF",
+    "GBPCHF",
+    "EURJPY",
+    "USDZAR",
+    "EURNZD",
+)
+
+QUOTEX_PAIRS_SET = frozenset(QUOTEX_PAIRS)

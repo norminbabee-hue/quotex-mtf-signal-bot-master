@@ -149,9 +149,21 @@ def telegram_publisher_from_env() -> TelegramPublisher | None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
-        LOG.info("Telegram publisher disabled: edit .env and set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID")
+        LOG.warning(
+            "Telegram disabled: TELEGRAM_BOT_TOKEN=%s, TELEGRAM_CHAT_ID=%s. "
+            "Put both values in the project-root .env file (not .env.example).",
+            "SET" if token else "MISSING",
+            "SET" if chat_id else "MISSING",
+        )
         return None
-    return TelegramPublisher(TelegramConfig(bot_token=token, chat_id=chat_id))
+    publisher = TelegramPublisher(TelegramConfig(bot_token=token, chat_id=chat_id))
+    try:
+        username = publisher.verify_connection()
+    except Exception as exc:
+        LOG.error("Telegram configuration found but connection check failed: %s", exc)
+        return None
+    LOG.info("Telegram connected successfully: @%s | chat_id configured=YES", username)
+    return publisher
 
 
 def publish_live_signal(publisher: TelegramPublisher | None, signal) -> None:
@@ -175,9 +187,6 @@ def main() -> None:
     history_count = max(60, int(os.getenv("MT5_HISTORY_COUNT", "200")))
     path = os.getenv("MT5_PATH") or None
 
-    # Quotex is the source of truth for the trading universe. MT5 is only the
-    # candle/tick feed, so an empty MT5_SYMBOLS now means the fixed Quotex list,
-    # not every FX instrument visible in MT5.
     configured_symbols = tuple(
         item.strip().upper()
         for item in os.getenv("MT5_SYMBOLS", "").split(",")

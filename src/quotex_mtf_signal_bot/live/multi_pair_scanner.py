@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Iterable
 
 from quotex_mtf_signal_bot.data.live_candles import LiveCandleManager
@@ -8,6 +9,7 @@ from quotex_mtf_signal_bot.data.mt5_adapter import MarketDataAdapter, Tick
 from quotex_mtf_signal_bot.data.symbol_registry import SymbolRegistry
 from quotex_mtf_signal_bot.signals.model import Signal
 from quotex_mtf_signal_bot.live.mtf_signal_service import LiveMTFSignalService
+from quotex_mtf_signal_bot.core.models import Timeframe
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +86,28 @@ class MultiPairScanner:
             self._broker_symbols = dict(broker_pairs)
             self.managers = {symbol: self.managers[symbol] for symbol in valid}
             self.services = {symbol: self.services[symbol] for symbol in valid}
+
+    def preview_candidates(self, now_utc: datetime, lead_seconds: int = 45) -> list[Signal]:
+        """Return actionable candidates whose next candle opens in the lead window.
+
+        Every pair is evaluated internally, but only actionable candidates are
+        returned. The caller ranks them and publishes at most one signal per
+        target window.
+        """
+        now_utc = now_utc.astimezone(timezone.utc)
+        candidates: list[Signal] = []
+        for symbol, service in self.services.items():
+            for timeframe in (Timeframe.M1, Timeframe.M5, Timeframe.M15):
+                seconds = timeframe.seconds
+                epoch = int(now_utc.timestamp())
+                next_epoch = ((epoch // seconds) + 1) * seconds
+                entry = datetime.fromtimestamp(next_epoch, tz=timezone.utc)
+                seconds_to_entry = (entry - now_utc).total_seconds()
+                if lead_seconds - 10 <= seconds_to_entry <= lead_seconds + 10:
+                    signal = service.preview_next_signal(timeframe, entry)
+                    if signal is not None and float(signal.confidence) > 0:
+                        candidates.append(signal)
+        return candidates
 
     def on_tick(self, tick: Tick) -> None:
         canonical = SymbolRegistry.canonical_symbol(tick.symbol)

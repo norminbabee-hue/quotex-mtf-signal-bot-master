@@ -58,6 +58,7 @@ class TelegramPublisher:
             f"PAIR: {TelegramPublisher._pair_label(signal.symbol)}",
             f"TIMEFRAME: {target}",
             f"NEXT {target}: {TelegramPublisher._direction_label(signal)}",
+            f"TARGET: NEXT CLOSED {target} CANDLE",
             "STATUS: ✅ ACTIONABLE",
             f"ENTRY IN: {entry_seconds} SEC",
             f"ENTRY QUOTEX TIME: {quotex_entry.strftime('%Y-%m-%d %H:%M:%S')}",

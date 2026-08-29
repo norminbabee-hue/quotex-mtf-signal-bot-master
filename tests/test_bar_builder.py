@@ -33,7 +33,7 @@ def test_builder_creates_m1_bar_from_ticks():
     assert m1[0].open == Decimal("1.10001")
     assert m1[0].high == Decimal("1.10021")
     assert m1[0].low == Decimal("1.10001")
-    assert m1[0].close == Decimal("1.10011")
+    assert m1[0].close == Decimal("1.10021")
     assert m1[0].tick_volume == 2
 
 

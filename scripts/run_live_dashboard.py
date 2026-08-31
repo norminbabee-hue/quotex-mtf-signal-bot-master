@@ -3,9 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from quotex_mtf_signal_bot.config.quotex_pairs import QUOTEX_PAIRS
 from quotex_mtf_signal_bot.data.mt5_adapter import MT5Adapter, Tick
@@ -13,7 +19,6 @@ from quotex_mtf_signal_bot.live.multi_pair_scanner import MultiPairScanner
 from quotex_mtf_signal_bot.telegram.publisher import TelegramConfig, TelegramPublisher
 
 LOG = logging.getLogger("quotex_mtf_signal_bot.dashboard")
-ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "live.json"
 ENV_FILE = ROOT / ".env"
 TIMEFRAMES = ("M1", "M5", "M15")
@@ -221,9 +226,6 @@ def main() -> None:
                         last_ticks[pair] = tick
                         scanner.on_tick(tick)
 
-                # The old closed-candle callback is retained for history/logging,
-                # but Telegram entry messages are generated here, before the
-                # target candle opens, so the trader has time to select the pair.
                 if active_signal is None or now >= active_signal.entry_time_utc + timedelta(minutes={"M1": 1, "M5": 5, "M15": 15}.get(active_signal.target_timeframe, 1)):
                     active_signal = None
 
@@ -239,7 +241,6 @@ def main() -> None:
                             active_signal = best
                             LOG.info("ACTIONABLE PICK pair=%s target=%s direction=%s confidence=%.1f%% candidates=%d", best.symbol, best.target_timeframe, best.next_candle_direction or best.direction, float(best.confidence), len(candidates))
 
-                # Keep the dedupe set small.
                 if len(published_targets) > 100:
                     published_targets = set(list(published_targets)[-30:])
 

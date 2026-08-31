@@ -26,3 +26,5 @@ data/raw/
 data/cache/
 logs/
 reports/
+.env
+data/live.json
